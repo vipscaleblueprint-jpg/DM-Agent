@@ -393,3 +393,23 @@ export async function getPromptForStage(stage: number) {
     default: return stage1Prompt;
   }
 }
+
+export async function editLead(leadId: string, name: string, fbLink?: string) {
+  await prisma.lead.update({
+    where: { id: leadId },
+    data: {
+      name,
+      fb_link: fbLink || null,
+      updatedAt: new Date()
+    }
+  });
+  revalidatePath('/');
+}
+
+export async function removeLead(leadId: string) {
+  await prisma.conversation.deleteMany({ where: { lead_id: leadId } });
+  await prisma.stageTransition.deleteMany({ where: { lead_id: leadId } });
+  await prisma.leadState.deleteMany({ where: { lead_id: leadId } });
+  await prisma.lead.delete({ where: { id: leadId } });
+  revalidatePath('/');
+}

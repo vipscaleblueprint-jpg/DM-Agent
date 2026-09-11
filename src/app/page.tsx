@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { getLeads, getLeadDetails, generateDraftResponse, addLead, getPresignedUrl, sendLeadMessage, saveClientContext, uploadFileToR2, getGlobalClient, getPromptForStage } from './actions';
+import { getLeads, getLeadDetails, generateDraftResponse, addLead, getPresignedUrl, sendLeadMessage, saveClientContext, uploadFileToR2, getGlobalClient, getPromptForStage, editLead, removeLead } from './actions';
 
 export default function DMApp() {
   const [leads, setLeads] = useState<any[]>([]);
@@ -11,7 +11,6 @@ export default function DMApp() {
   const [contextText, setContextText] = useState('');
   const [contextUrls, setContextUrls] = useState<string[]>([]);
   const [isSavingContext, setIsSavingContext] = useState(false);
-  const [uploadedFiles, setUploadedFiles] = useState<{name: string, url: string}[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   
@@ -19,6 +18,11 @@ export default function DMApp() {
   const [showAddLead, setShowAddLead] = useState(false);
   const [newLeadName, setNewLeadName] = useState('');
   const [newLeadFbLink, setNewLeadFbLink] = useState('');
+
+  // Edit Lead Modal State
+  const [showEditLead, setShowEditLead] = useState(false);
+  const [editLeadName, setEditLeadName] = useState('');
+  const [editLeadFbLink, setEditLeadFbLink] = useState('');
 
   // Global Context Modal State
   const [showContextModal, setShowContextModal] = useState(false);
@@ -30,7 +34,6 @@ export default function DMApp() {
   // Simulated Time State
   const [simulatedTime, setSimulatedTime] = useState<string>('');
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const contextInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -60,7 +63,6 @@ export default function DMApp() {
     if (activeLeadId) {
       fetchLeadDetails(activeLeadId);
       setInputText('');
-      setUploadedFiles([]);
     }
   }, [activeLeadId]);
 
@@ -92,28 +94,28 @@ export default function DMApp() {
     setIsLoading(false);
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const handleEditLead = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editLeadName.trim() || !activeLeadId) return;
+    
     setIsLoading(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      
-      const { fileUrl, error } = await uploadFileToR2(formData);
-      
-      if (error) {
-        alert(`Upload failed: ${error}`);
-      } else if (fileUrl) {
-        const publicUrl = process.env.NEXT_PUBLIC_R2_URL || 'https://aidm.xfnite.cloud';
-        setUploadedFiles(prev => [...prev, { name: file.name, url: `${publicUrl}/${fileUrl}` }]);
-      }
-    } catch (err) {
-      console.error('Upload failed', err);
-      alert('Upload failed. See console.');
-    }
+    await editLead(activeLeadId, editLeadName, editLeadFbLink);
+    await fetchLeads();
+    await fetchLeadDetails(activeLeadId);
+    setShowEditLead(false);
     setIsLoading(false);
+  };
+
+  const handleDeleteLead = async () => {
+    if (!activeLeadId) return;
+    if (confirm("Are you sure you want to delete this lead? All chat history and state will be lost forever.")) {
+      setIsLoading(true);
+      await removeLead(activeLeadId);
+      setActiveLeadId(null);
+      setLeadDetails(null);
+      await fetchLeads();
+      setIsLoading(false);
+    }
   };
 
   const handleContextUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -202,14 +204,9 @@ export default function DMApp() {
     
     setIsLoading(true);
     let finalPayload = inputText;
-    if (uploadedFiles.length > 0) {
-      const attachments = uploadedFiles.map(f => `[Attached Image: ${f.url}]`).join('\n');
-      finalPayload = `${inputText}\n\n${attachments}`;
-    }
 
     await sendLeadMessage(leadDetails.id, finalPayload);
     setInputText('');
-    setUploadedFiles([]);
     await fetchLeadDetails(activeLeadId as string);
     setIsLoading(false);
   };
@@ -224,7 +221,6 @@ export default function DMApp() {
     
     if (res.success) {
       setInputText('');
-      setUploadedFiles([]);
       await fetchLeadDetails(activeLeadId as string);
     } else {
       alert(`Draft generation failed: ${res.error}`);
@@ -246,7 +242,6 @@ export default function DMApp() {
     
     if (res.success) {
       setInputText('');
-      setUploadedFiles([]);
       await fetchLeadDetails(activeLeadId as string);
     } else {
       alert(`Draft generation failed: ${res.error}`);
@@ -342,6 +337,16 @@ export default function DMApp() {
               <div>
                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   Chat with {leadDetails.name}
+                  <button onClick={() => {
+                    setEditLeadName(leadDetails.name);
+                    setEditLeadFbLink(leadDetails.fb_link || '');
+                    setShowEditLead(true);
+                  }} className="btn btn-secondary" style={{ padding: '0.2rem', background: 'transparent', border: 'none', color: 'var(--muted)' }} title="Edit Lead">
+                    <span className="material-symbols-sharp" style={{ fontSize: '1rem' }}>edit</span>
+                  </button>
+                  <button onClick={handleDeleteLead} className="btn btn-secondary" style={{ padding: '0.2rem', background: 'transparent', border: 'none', color: '#ef4444' }} title="Delete Lead">
+                    <span className="material-symbols-sharp" style={{ fontSize: '1rem' }}>delete</span>
+                  </button>
                 </h3>
                 {leadDetails.fb_link && (
                   <a href={leadDetails.fb_link} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', color: 'var(--primary)' }}>
@@ -422,13 +427,6 @@ export default function DMApp() {
 
             {/* Bottom Input Area */}
             <div style={{ flexShrink: 0, padding: '1rem', background: '#ffffff', borderTop: '1px solid var(--border)' }}>
-              {uploadedFiles.length > 0 && (
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-                  {uploadedFiles.map((f, i) => (
-                    <span key={i} className="badge"><span className="material-symbols-sharp" style={{ fontSize: '1rem', marginRight: '4px' }}>image</span> {f.name}</span>
-                  ))}
-                </div>
-              )}
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
                 <textarea 
                   style={{ flex: 1, minHeight: '60px', padding: '0.75rem', borderRadius: 'var(--radius)', border: '1px solid var(--border)', resize: 'vertical' }}
@@ -438,13 +436,9 @@ export default function DMApp() {
                   disabled={isLoading}
                 />
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  <button type="button" className="btn btn-secondary" style={{ padding: '0.5rem' }} onClick={() => fileInputRef.current?.click()} title="Upload Image">
-                    <span className="material-symbols-sharp">image</span>
-                  </button>
                   <button type="button" className="btn" style={{ padding: '0.5rem 1rem', background: '#16a34a', color: 'white' }} onClick={handleSendMessage} disabled={isLoading || !inputText.trim()}>
                     <span className="material-symbols-sharp">send</span>
                   </button>
-                  <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept="image/*" onChange={handleFileUpload} />
                 </div>
               </div>
             </div>
@@ -572,6 +566,48 @@ export default function DMApp() {
                 </button>
                 <button type="submit" className="btn btn-primary" disabled={isLoading || !newLeadName.trim()}>
                   {isLoading ? 'Adding...' : 'Add Lead'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Lead Modal */}
+      {showEditLead && (
+        <div className="modal-backdrop" onClick={() => !isLoading && setShowEditLead(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <h3 style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="material-symbols-sharp">edit</span>
+              Edit Lead
+            </h3>
+            <form onSubmit={handleEditLead}>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Lead Name</label>
+                <input 
+                  type="text" 
+                  value={editLeadName}
+                  onChange={(e) => setEditLeadName(e.target.value)}
+                  placeholder="e.g. Dr. Jane Smith"
+                  required
+                  autoFocus
+                />
+              </div>
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Facebook Profile URL (Optional)</label>
+                <input 
+                  type="url" 
+                  value={editLeadFbLink}
+                  onChange={(e) => setEditLeadFbLink(e.target.value)}
+                  placeholder="https://facebook.com/..."
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setShowEditLead(false)} disabled={isLoading}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={isLoading || !editLeadName.trim()}>
+                  {isLoading ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
             </form>
