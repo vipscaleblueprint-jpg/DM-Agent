@@ -1,0 +1,118 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Client {
+  id        String   @id
+  name      String
+  fb_link   String?
+  context   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+  Lead      Lead[]
+}
+
+model Conversation {
+  id        BigInt      @id @default(autoincrement())
+  lead_id   String
+  role      MessageRole
+  content   String
+  createdAt DateTime    @default(now())
+  Lead      Lead        @relation(fields: [lead_id], references: [id])
+}
+
+model Intent {
+  id               String             @id
+  name             String             @unique
+  LeadState        LeadState[]
+  SecondaryIntents SecondaryIntents[]
+}
+
+model Lead {
+  id              String            @id
+  name            String            @default("Unknown Lead")
+  fb_link         String?
+  client_id       String
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime
+  Conversation    Conversation[]
+  Client          Client            @relation(fields: [client_id], references: [id])
+  LeadState       LeadState?
+  StageTransition StageTransition[]
+}
+
+model LeadState {
+  lead_id               String             @id
+  stage                 Int                @default(1)
+  stageName             String             @default("getting_to_know")
+  primary_intent_id     String?
+  connectionLevel       ConnectionLevel    @default(LOW)
+  quizOffered           Boolean            @default(false)
+  quizCompleted         Boolean            @default(false)
+  masterclassOffered    Boolean            @default(false)
+  masterclassWatched    Boolean            @default(false)
+  offerIntroduced       Boolean            @default(false)
+  currentSituation      String?
+  goal                  String?
+  painPoint             String?
+  desiredFuture         String?
+  coreProblem           String?
+  insightGiven          String?
+  leadReaction          String?
+  curiosityLevel        String?
+  quizAccepted          Boolean?
+  quizResult            String?
+  resultInterpretation  String?
+  deeperGoal            String?
+  desireLevel           String?
+  masterclassEngagement String?
+  beliefLevel           String?
+  offerInterest         String?
+  objection             String?
+  decisionStatus        String?
+  nextAction            String?
+  lastStageChangeReason String?
+  nextStageRequirement  String?
+  quiz_url              String?
+  masterclass_url       String?
+  updatedAt             DateTime
+  Lead                  Lead               @relation(fields: [lead_id], references: [id])
+  Intent                Intent?            @relation(fields: [primary_intent_id], references: [id])
+  SecondaryIntents      SecondaryIntents[]
+}
+
+model StageTransition {
+  id        BigInt   @id @default(autoincrement())
+  lead_id   String
+  fromStage Int
+  toStage   Int
+  changedAt DateTime @default(now())
+  Lead      Lead     @relation(fields: [lead_id], references: [id])
+}
+
+model SecondaryIntents {
+  A         String
+  B         String
+  Intent    Intent    @relation(fields: [A], references: [id], onDelete: Cascade)
+  LeadState LeadState @relation(fields: [B], references: [lead_id], onDelete: Cascade)
+
+  @@id([A, B], map: "_SecondaryIntents_AB_pkey")
+  @@index([B], map: "_SecondaryIntents_B_index")
+  @@map("_SecondaryIntents")
+}
+
+enum ConnectionLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum MessageRole {
+  user
+  assistant
+}
