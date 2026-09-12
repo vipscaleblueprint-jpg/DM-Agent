@@ -12,9 +12,22 @@ model Client {
   name      String
   fb_link   String?
   context   String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime
-  Lead      Lead[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  Lead        Lead[]
+  ClientStage ClientStage[]
+}
+
+model ClientStage {
+  id              String   @id @default(uuid())
+  client_id       String
+  stageOrder      Int
+  stageName       String
+  systemPrompt    String
+  checklistConfig Json?    @default("[]")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  Client          Client   @relation(fields: [client_id], references: [id])
 }
 
 model Conversation {
@@ -52,35 +65,11 @@ model LeadState {
   stageName             String             @default("getting_to_know")
   primary_intent_id     String?
   connectionLevel       ConnectionLevel    @default(LOW)
-  quizOffered           Boolean            @default(false)
-  quizCompleted         Boolean            @default(false)
-  masterclassOffered    Boolean            @default(false)
-  masterclassWatched    Boolean            @default(false)
-  offerIntroduced       Boolean            @default(false)
-  currentSituation      String?
-  goal                  String?
-  painPoint             String?
-  desiredFuture         String?
-  coreProblem           String?
-  insightGiven          String?
-  leadReaction          String?
-  curiosityLevel        String?
-  quizAccepted          Boolean?
-  quizResult            String?
-  resultInterpretation  String?
-  deeperGoal            String?
-  desireLevel           String?
-  masterclassEngagement String?
-  beliefLevel           String?
-  offerInterest         String?
-  objection             String?
-  decisionStatus        String?
-  nextAction            String?
+  assessmentData        Json?              @default("{}")
   lastStageChangeReason String?
   nextStageRequirement  String?
-  quiz_url              String?
-  masterclass_url       String?
-  updatedAt             DateTime
+  leadSummary           String?
+  updatedAt             DateTime           @updatedAt
   Lead                  Lead               @relation(fields: [lead_id], references: [id])
   Intent                Intent?            @relation(fields: [primary_intent_id], references: [id])
   SecondaryIntents      SecondaryIntents[]

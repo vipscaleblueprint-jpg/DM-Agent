@@ -4,16 +4,12 @@ import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { stage1Prompt } from '@/prompts/stage1';
-import { stage2Prompt } from '@/prompts/stage2';
-import { stage3Prompt } from '@/prompts/stage3';
-import { stage4Prompt } from '@/prompts/stage4';
-import { stage5Prompt } from '@/prompts/stage5';
-import { stage6Prompt } from '@/prompts/stage6';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
-export async function getLeads() {
+export async function getLeads(clientId?: string) {
+  if (!clientId) return [];
   const leads = await prisma.lead.findMany({
+    where: { client_id: clientId },
     orderBy: { updatedAt: 'desc' },
     include: {
       Client: true,
@@ -97,6 +93,85 @@ export async function getGlobalClient() {
   return client;
 }
 
+export async function getClients() {
+  const clients = await prisma.client.findMany({
+    orderBy: { createdAt: 'desc' },
+  });
+  return clients;
+}
+
+export async function addClient(name: string) {
+  if (!name.trim()) return { success: false, error: 'Name is required' };
+  try {
+    const client = await prisma.client.create({
+      data: {
+        id: `client_${Date.now()}`,
+        name: name.trim(),
+        updatedAt: new Date(),
+      }
+    });
+    revalidatePath('/');
+    return { success: true, client };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+export async function editClient(id: string, name: string) {
+  if (!name.trim()) return { success: false, error: 'Name is required' };
+  try {
+    const client = await prisma.client.update({
+      where: { id },
+      data: {
+        name: name.trim(),
+        updatedAt: new Date(),
+      }
+    });
+    revalidatePath('/');
+    return { success: true, client };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+export async function getClientStage(clientId: string, stageOrder: number) {
+  const stage = await prisma.clientStage.findFirst({
+    where: { client_id: clientId, stageOrder }
+  });
+  // Serialize BigInt safely just in case, though there are no BigInts in ClientStage usually
+  return JSON.parse(JSON.stringify(stage));
+}
+
+export async function getClientStages(clientId: string) {
+  const stages = await prisma.clientStage.findMany({
+    where: { client_id: clientId },
+    orderBy: { stageOrder: 'asc' }
+  });
+  return JSON.parse(JSON.stringify(stages));
+}
+
+export async function saveClientStages(clientId: string, stages: any[]) {
+  // First, delete existing stages for this client
+  await prisma.clientStage.deleteMany({
+    where: { client_id: clientId }
+  });
+
+  // Then create new ones
+  for (const stage of stages) {
+    await prisma.clientStage.create({
+      data: {
+        client_id: clientId,
+        stageOrder: stage.stageOrder,
+        stageName: stage.stageName,
+        systemPrompt: stage.systemPrompt,
+        checklistConfig: stage.checklistConfig || []
+      }
+    });
+  }
+  revalidatePath('/');
+  return { success: true };
+}
+
 export async function saveClientContext(clientId: string | null, contextText: string) {
   let id = clientId;
   if (!id) {
@@ -120,6 +195,7 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
   }
 
   // 2. Retrieve history and state
+  const lead = await prisma.lead.findUnique({ where: { id: leadId } });
   const leadState = await prisma.leadState.findUnique({ where: { lead_id: leadId } });
   const client = await prisma.client.findUnique({ where: { id: clientId } });
   const conversations = await prisma.conversation.findMany({
@@ -137,17 +213,15 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
   const stageName = leadState?.stageName || 'getting_to_know';
 
   const systemPrompt = `
-${await getPromptForStage(stage)}
+${await getPromptForStage(stage, clientId)}
 
 Current Time: ${simulatedTime || new Date().toISOString()}
 
 Current Lead Profile:
+Name: ${lead?.name || 'Unknown'}
 Stage: ${stage} (${stageName})
-Current Situation: ${leadState?.currentSituation || 'Unknown'}
-Pain Point: ${leadState?.painPoint || 'Unknown'}
-Goal: ${leadState?.goal || 'Unknown'}
-Desired Future: ${leadState?.desiredFuture || 'Unknown'}
-Core Problem: ${leadState?.coreProblem || 'Unknown'}
+Assessment Data Captured So Far:
+${JSON.stringify(leadState?.assessmentData || {}, null, 2)}
 
 ${client?.context ? `EXTRA CONTEXT (Client Product/Business Rules):\n${client.context}\n\nStrictly follow this context.` : ''}
 
@@ -186,79 +260,34 @@ Output JSON according to the schema.
         stage: z.number().describe('The current stage number'),
         stage_name: z.string().describe('Name of the stage'),
         primary_intent: z.enum(['wealth', 'time_freedom', 'additional_income', 'career_change', 'identity', 'ownership', 'fulfillment', 'clarity', 'legacy', 'other', 'unknown']).optional().describe('The primary intent identified'),
-        current_situation: z.string().optional().describe('Brief summary of current situation'),
-        goal: z.string().optional().describe('Brief summary of their goal'),
-        pain_point: z.string().optional().describe('Brief summary of their pain point'),
-        desired_future: z.string().optional().describe('Brief summary of their desired future'),
         connection_level: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional().describe('Connection level built so far'),
-        core_problem: z.string().optional().describe('The identified core problem'),
-        insight_given: z.string().optional().describe('The insight given to the lead'),
-        lead_reaction: z.string().optional().describe('How the lead reacted to the insight'),
-        curiosity_level: z.enum(['low', 'medium', 'high', 'LOW', 'MEDIUM', 'HIGH']).optional().describe('Level of curiosity'),
-        quiz_offered: z.boolean().optional().describe('Has the quiz been offered?'),
-        quiz_accepted: z.boolean().optional().describe('Has the lead accepted the quiz?'),
-        quiz_completed: z.boolean().optional().describe('Has the lead completed the quiz?'),
-        quiz_result: z.string().optional().describe('The result of the quiz'),
-        result_interpretation: z.string().optional().describe('How the result was interpreted'),
-        deeper_goal: z.string().optional().describe('A deeper goal discovered in Stage 4'),
-        desire_level: z.enum(['low', 'medium', 'high', 'LOW', 'MEDIUM', 'HIGH']).optional().describe('Level of desire'),
-        masterclass_offered: z.boolean().optional().describe('Has the masterclass been offered?'),
-        masterclass_engagement: z.string().optional().describe('Engagement with the masterclass'),
-        belief_level: z.enum(['low', 'medium', 'high', 'LOW', 'MEDIUM', 'HIGH']).optional().describe('Level of belief'),
-        offer_introduced: z.boolean().optional().describe('Has the paid offer been introduced?'),
-        offer_interest: z.string().optional().describe('Level of interest in the offer'),
-        objection: z.string().optional().describe('Any stated objection to the offer'),
-        decision_status: z.string().optional().describe('Status of the decision (e.g. considering, purchased)'),
-        next_action: z.string().optional().describe('Next action to take with the lead'),
         stage_ready_for_promotion: z.boolean().describe('Are they ready to advance to the next stage based on exit conditions?'),
         reason: z.string().describe('Brief explanation for stage promotion decision'),
-        next_stage: z.number().describe('The stage they should be in next')
+        next_stage: z.number().describe('The stage they should be in next'),
+        summary: z.string().optional().describe('Brief summary of what we know about the lead so far'),
+        assessment_updates: z.record(z.string(), z.any()).describe('A dictionary updating any dynamic checklist keys for this stage. Key is the checklist item ID, value is the updated value (e.g. boolean, string).')
       }),
     });
 
-    const resolveStageName = (num: number, currentName: string) => {
-      switch(num) {
-        case 1: return 'getting_to_know';
-        case 2: return 'curiosity';
-        case 3: return 'interest';
-        case 4: return 'engagement';
-        case 5: return 'authority_and_desire';
-        case 6: return 'decision';
-        default: return currentName;
-      }
+    const resolveStageName = async (num: number, currentName: string, clientId: string) => {
+      const st = await prisma.clientStage.findFirst({ where: { client_id: clientId, stageOrder: num } });
+      if (st) return st.stageName;
+      return currentName;
     };
 
     // 4. Update the LeadState based on LLM output
+    const currentAssessmentData = leadState?.assessmentData ? JSON.parse(JSON.stringify(leadState.assessmentData)) : {};
+    const newAssessmentData = { ...currentAssessmentData, ...(object.assessment_updates || {}) };
+
     await prisma.leadState.update({
       where: { lead_id: leadId },
       data: {
         stage: object.next_stage,
-        stageName: resolveStageName(object.next_stage, object.stage_name),
-        currentSituation: object.current_situation,
-        painPoint: object.pain_point,
-        goal: object.goal,
-        desiredFuture: object.desired_future,
-        coreProblem: object.core_problem,
-        insightGiven: object.insight_given,
-        leadReaction: object.lead_reaction,
-        curiosityLevel: object.curiosity_level,
+        stageName: await resolveStageName(object.next_stage, object.stage_name, clientId),
         connectionLevel: object.connection_level === 'LOW' || object.connection_level === 'MEDIUM' || object.connection_level === 'HIGH' ? object.connection_level : undefined,
-        quizOffered: object.quiz_offered,
-        quizAccepted: object.quiz_accepted,
-        quizCompleted: object.quiz_completed,
-        quizResult: object.quiz_result,
-        resultInterpretation: object.result_interpretation,
-        deeperGoal: object.deeper_goal,
-        desireLevel: object.desire_level,
-        masterclassOffered: object.masterclass_offered,
-        masterclassEngagement: object.masterclass_engagement,
-        beliefLevel: object.belief_level,
-        offerIntroduced: object.offer_introduced,
-        offerInterest: object.offer_interest,
-        objection: object.objection,
-        decisionStatus: object.decision_status,
-        nextAction: object.next_action,
         lastStageChangeReason: object.reason,
+        leadSummary: object.summary,
+        assessmentData: newAssessmentData,
         updatedAt: new Date()
       }
     });
@@ -277,6 +306,16 @@ Output JSON according to the schema.
 
   } catch (error: any) {
     console.error('LLM Error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+export async function deleteMessage(messageId: string) {
+  try {
+    await prisma.conversation.delete({ where: { id: BigInt(messageId) } });
+    revalidatePath('/');
+    return { success: true };
+  } catch (error: any) {
     return { success: false, error: error.message };
   }
 }
@@ -347,18 +386,22 @@ export async function uploadFileToR2(formData: FormData) {
   }
 }
 
-export async function addLead(name: string, fbLink?: string) {
+export async function addLead(name: string, fbLink?: string, clientId?: string) {
   const leadId = `lead_${Date.now()}`;
   
-  let client = await prisma.client.findFirst();
-  if (!client) {
-    client = await prisma.client.create({
-      data: {
-        id: `client_${Date.now()}`,
-        name: 'Business Owner',
-        updatedAt: new Date(),
-      }
-    });
+  let targetClientId = clientId;
+  if (!targetClientId) {
+    let client = await prisma.client.findFirst();
+    if (!client) {
+      client = await prisma.client.create({
+        data: {
+          id: `client_${Date.now()}`,
+          name: 'Business Owner',
+          updatedAt: new Date(),
+        }
+      });
+    }
+    targetClientId = client.id;
   }
 
   await prisma.lead.create({
@@ -366,7 +409,7 @@ export async function addLead(name: string, fbLink?: string) {
       id: leadId,
       name,
       fb_link: fbLink || null,
-      client_id: client.id,
+      client_id: targetClientId,
       updatedAt: new Date(),
       LeadState: {
         create: {
@@ -382,16 +425,17 @@ export async function addLead(name: string, fbLink?: string) {
   return leadId;
 }
 
-export async function getPromptForStage(stage: number) {
-  switch (stage) {
-    case 1: return stage1Prompt;
-    case 2: return stage2Prompt;
-    case 3: return stage3Prompt;
-    case 4: return stage4Prompt;
-    case 5: return stage5Prompt;
-    case 6: return stage6Prompt;
-    default: return stage1Prompt;
+export async function getPromptForStage(stage: number, clientId: string) {
+  const clientStage = await prisma.clientStage.findFirst({
+    where: { client_id: clientId, stageOrder: stage }
+  });
+  
+  if (clientStage && clientStage.systemPrompt) {
+    return clientStage.systemPrompt;
   }
+  
+  // Fallback if no stage config is found
+  return "You are an AI sales assistant. Guide the user through the sales process.";
 }
 
 export async function editLead(leadId: string, name: string, fbLink?: string) {
@@ -412,4 +456,56 @@ export async function removeLead(leadId: string) {
   await prisma.leadState.deleteMany({ where: { lead_id: leadId } });
   await prisma.lead.delete({ where: { id: leadId } });
   revalidatePath('/');
+}
+
+export async function editConversationMessage(msgIdStr: string, newContent: string) {
+  await prisma.conversation.update({
+    where: { id: BigInt(msgIdStr) },
+    data: { content: newContent }
+  });
+  revalidatePath('/');
+}
+
+export async function learnFromCorrection(clientId: string, originalContent: string, newContent: string) {
+  if (!process.env.API_KEY) return { success: false, error: 'API_KEY not set' };
+  
+  const systemPrompt = `You are an AI teaching assistant. The user just corrected a drafted DM response.
+Original AI Draft:
+"${originalContent}"
+
+User's Corrected Version:
+"${newContent}"
+
+Extract ONE highly concise, generalized rule (1-2 sentences max) that the AI should follow for future messages so it doesn't make the same mistake.
+Do not refer to the specific lead. Frame it as a direct instruction to the AI.`;
+
+  try {
+    const { object } = await generateObject({
+      model: google('gemini-3.7-flash'),
+      system: systemPrompt,
+      messages: [{ role: 'user', content: 'Extract rule' }],
+      schema: z.object({
+        rule: z.string().describe('The extracted rule to learn from this correction')
+      })
+    });
+
+    const ruleText = `\n\n[LEARNED RULE]: ${object.rule}`;
+    
+    const client = await prisma.client.findUnique({ where: { id: clientId } });
+    if (client) {
+      await prisma.client.update({
+        where: { id: clientId },
+        data: { 
+          context: (client.context || '') + ruleText,
+          updatedAt: new Date()
+        }
+      });
+      revalidatePath('/');
+      return { success: true, rule: object.rule };
+    }
+    return { success: false, error: 'Client not found' };
+  } catch (error: any) {
+    console.error('Learning Error:', error);
+    return { success: false, error: error.message };
+  }
 }
