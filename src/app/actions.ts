@@ -6,18 +6,21 @@ import { revalidatePath } from 'next/cache';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
-export async function getLeads(clientId?: string) {
-  if (!clientId) return [];
+export async function getLeads(clientId: string, productId?: string) {
+  let whereClause: any = { client_id: clientId };
+  if (productId) {
+    whereClause.product_id = productId;
+  }
   const leads = await prisma.lead.findMany({
-    where: { client_id: clientId },
-    orderBy: { updatedAt: 'desc' },
+    where: whereClause,
+    orderBy: { createdAt: 'desc' },
     include: {
-      Client: true,
       LeadState: true,
       Conversation: {
-        orderBy: { createdAt: 'asc' },
-      },
-    },
+        orderBy: { createdAt: 'desc' },
+        take: 1
+      }
+    }
   });
   
   // Serialize BigInt safely
@@ -95,7 +98,8 @@ export async function getGlobalClient() {
 
 export async function getClients() {
   const clients = await prisma.client.findMany({
-    orderBy: { createdAt: 'desc' },
+    orderBy: { createdAt: 'asc' },
+    include: { Product: true }
   });
   return clients;
 }
@@ -195,7 +199,10 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
   }
 
   // 2. Retrieve history and state
-  const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+  const lead = await prisma.lead.findUnique({ 
+    where: { id: leadId },
+    include: { Product: true }
+  });
   const leadState = await prisma.leadState.findUnique({ where: { lead_id: leadId } });
   const client = await prisma.client.findUnique({ where: { id: clientId } });
   const conversations = await prisma.conversation.findMany({
@@ -223,7 +230,7 @@ Stage: ${stage} (${stageName})
 Assessment Data Captured So Far:
 ${JSON.stringify(leadState?.assessmentData || {}, null, 2)}
 
-${client?.context ? `EXTRA CONTEXT (Client Product/Business Rules):\n${client.context}\n\nStrictly follow this context.` : ''}
+${lead?.Product ? `PRODUCT CONTEXT (Keep this specific product in mind while responding):\nProduct Name: ${lead.Product.product_name}\nValue Proposition (VPS): ${lead.Product.vps || 'None provided'}\nTarget Persona: ${lead.Product.persona || 'None provided'}\n` : ''}
 
 Output JSON according to the schema.
 `;
@@ -507,5 +514,193 @@ Do not refer to the specific lead. Frame it as a direct instruction to the AI.`;
   } catch (error: any) {
     console.error('Learning Error:', error);
     return { success: false, error: error.message };
+  }
+}
+
+export async function syncClientsFromWebhook() {
+  try {
+    const response = await fetch("https://n8n.heysnaply.com/webhook/clients/vps-2", {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch from webhook: ${response.statusText}`);
+    }
+    
+    const rawData = await response.json();
+    if (!Array.isArray(rawData)) {
+      throw new Error("Webhook returned invalid format, expected array.");
+    }
+    
+    // Grouping by clean name
+    const groupedClients: Record<string, string[]> = {};
+    
+    for (const item of rawData) {
+      if (!item.client) continue;
+      
+      const cleanName = item.client
+        .replace(/^admin\s*\|\s*/i, "")
+        .replace(/\s*\|\s*personal\s*$/i, "")
+        .replace(/\s*\([^)]*\)\s*$/, "")
+        .trim();
+        
+      const match = item.client.match(/\(([^)]+)\)/);
+      const derivedProduct = match ? match[1] : "";
+      
+      const productName = item.product || derivedProduct || "Main Package";
+      const vpsLink = item.vps || "";
+      
+      if (!groupedClients[cleanName]) {
+        groupedClients[cleanName] = [];
+      }
+      
+      if (vpsLink) {
+        groupedClients[cleanName].push(`- Product: ${productName} | VPS: ${vpsLink}`);
+      }
+    }
+    
+    // Upsert clients
+    let syncedCount = 0;
+    for (const [cleanName, vpsList] of Object.entries(groupedClients)) {
+      if (vpsList.length === 0) continue;
+      
+      const vpsText = `VPS Links:\n${vpsList.join('\n')}`;
+      
+      // Find existing client by name
+      const existingClient = await prisma.client.findFirst({
+        where: { name: cleanName }
+      });
+      
+      if (existingClient) {
+        const currentContext = existingClient.context || "";
+        let newContext = currentContext;
+        
+        // Clean out old VPS links block if it exists
+        if (currentContext.includes("VPS Links:")) {
+          newContext = currentContext.replace(/VPS Links:[\s\S]*?(?=\n\n|$)/, "").trim();
+        }
+        
+        await prisma.client.update({
+          where: { id: existingClient.id },
+          data: {
+            context: `${vpsText}\n\n${newContext}`.trim(),
+            updatedAt: new Date()
+          }
+        });
+      } else {
+        await prisma.client.create({
+          data: {
+            id: `client_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            name: cleanName,
+            context: vpsText,
+            updatedAt: new Date()
+          }
+        });
+      }
+      syncedCount++;
+    }
+    
+    revalidatePath('/');
+    return { success: true, count: syncedCount };
+    
+  } catch (err: any) {
+    console.error('Webhook Sync Error:', err);
+    return { success: false, error: err.message };
+  }
+}
+
+export async function syncVipscaleClients() {
+  try {
+    const apiKey = process.env.VIPSCALE_API_KEY_SECRET;
+    if (!apiKey) throw new Error("Missing VIPSCALE_API_KEY_SECRET in .env");
+
+    const toolsUrl = process.env.VIPSCALE_TOOLS_URL || "https://tools.vipscaleph.com";
+    const response = await fetch(`${toolsUrl}/api/clients`, {
+      method: "GET",
+      headers: {
+        "x-api-key": apiKey 
+      },
+      cache: "no-store",
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch from VIPScale: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    const clients = data.clients || [];
+    
+    let syncedCount = 0;
+    for (const item of clients) {
+      const clientName = item.name || item.client || "Unknown Client";
+      
+      const existingClient = await prisma.client.findFirst({
+        where: { name: clientName }
+      });
+      
+      let clientId;
+      if (existingClient) {
+        clientId = existingClient.id;
+        await prisma.client.update({
+          where: { id: existingClient.id },
+          data: {
+            updatedAt: new Date()
+          }
+        });
+      } else {
+        const newClient = await prisma.client.create({
+          data: {
+            id: `client_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            name: clientName,
+            updatedAt: new Date()
+          }
+        });
+        clientId = newClient.id;
+      }
+
+      // Sync Products
+      if (item.products && Array.isArray(item.products)) {
+        for (const prod of item.products) {
+          const prodName = prod.product_name || "Unknown Product";
+          
+          const existingProd = await prisma.product.findFirst({
+            where: { client_id: clientId, product_name: prodName }
+          });
+
+          if (existingProd) {
+            await prisma.product.update({
+              where: { id: existingProd.id },
+              data: {
+                vps: prod.vps || null,
+                persona: prod.persona || null,
+                updatedAt: new Date()
+              }
+            });
+          } else {
+            await prisma.product.create({
+              data: {
+                id: `prod_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                client_id: clientId,
+                product_name: prodName,
+                vps: prod.vps || null,
+                persona: prod.persona || null,
+                updatedAt: new Date()
+              }
+            });
+          }
+        }
+      }
+
+      syncedCount++;
+    }
+    
+    revalidatePath('/');
+    return { success: true, count: syncedCount };
+    
+  } catch (err: any) {
+    console.error('VIPScale Sync Error:', err);
+    return { success: false, error: err.message };
   }
 }

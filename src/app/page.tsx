@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
-import { getLeads, getLeadDetails, generateDraftResponse, addLead, getPresignedUrl, sendLeadMessage, saveClientContext, uploadFileToR2, getGlobalClient, getPromptForStage, editLead, removeLead, editConversationMessage, learnFromCorrection, deleteMessage, getClients, addClient, getClientStage, editClient } from './actions';
+import { getLeads, getLeadDetails, generateDraftResponse, addLead, getPresignedUrl, sendLeadMessage, saveClientContext, uploadFileToR2, getGlobalClient, getPromptForStage, editLead, removeLead, editConversationMessage, learnFromCorrection, deleteMessage, getClients, addClient, getClientStage, editClient, getClientStages, saveClientStages, syncVipscaleClients } from './actions';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,7 +10,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent,  DropdownMenuItem, DropdownMenuTrigger,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent
+} from "@/components/ui/dropdown-menu";
 
 const RightSidebarContent = ({ leadDetails, activeStageConfig, handleShowDebugPrompt, setEditLeadName, setEditLeadFbLink, setShowEditLead, setShowDeleteLead }: any) => {
   return (
@@ -157,6 +162,7 @@ export default function DMApp() {
   const [leads, setLeads] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
   const [activeClientId, setActiveClientId] = useState<string | null>(null);
+  const [activeProductId, setActiveProductId] = useState<string | null>(null);
   const [activeLeadId, setActiveLeadId] = useState<string | null>(null);
   const [showMobileDetails, setShowMobileDetails] = useState(false);
   const [leadDetails, setLeadDetails] = useState<any>(null);
@@ -166,10 +172,13 @@ export default function DMApp() {
   const [contextUrls, setContextUrls] = useState<string[]>([]);
   const [isSavingContext, setIsSavingContext] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingLeads, setIsLoadingLeads] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [clientSearchQuery, setClientSearchQuery] = useState('');
   
   const [activeSettingsTab, setActiveSettingsTab] = useState<'knowledge' | 'funnel'>('knowledge');
   const [clientStagesState, setClientStagesState] = useState<any[]>([]);
+  const [activeStageIndex, setActiveStageIndex] = useState(0);
   
   // Add Lead Modal State
   const [showAddLead, setShowAddLead] = useState(false);
@@ -212,14 +221,21 @@ export default function DMApp() {
   const contextInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const fetchLeads = async (clientId?: string) => {
+  const fetchLeads = async (clientId?: string, productId?: string | null) => {
     try {
-      const target = clientId || activeClientId;
-      if (!target) return;
-      const data = await getLeads(target);
+      setIsLoadingLeads(true);
+      const targetClient = clientId || activeClientId;
+      const targetProduct = productId !== undefined ? productId : activeProductId;
+      if (!targetClient) {
+        setIsLoadingLeads(false);
+        return;
+      }
+      const data = await getLeads(targetClient, targetProduct || undefined);
       setLeads(JSON.parse(JSON.stringify(data)));
     } catch (err) {
       console.error(err);
+    } finally {
+      setIsLoadingLeads(false);
     }
   };
 
@@ -238,10 +254,19 @@ export default function DMApp() {
       setClients(clientsData);
       if (clientsData.length > 0) {
         const savedClientId = localStorage.getItem('lastActiveClientId');
-        if (savedClientId && clientsData.find((c: any) => c.id === savedClientId)) {
+        const savedProductId = localStorage.getItem('lastActiveProductId');
+        const foundClient = clientsData.find((c: any) => c.id === savedClientId);
+        
+        if (savedClientId && foundClient) {
           setActiveClientId(savedClientId);
+          if (savedProductId && foundClient.Product?.some((p: any) => p.id === savedProductId)) {
+            setActiveProductId(savedProductId);
+          } else {
+            setActiveProductId(null);
+          }
         } else {
           setActiveClientId(clientsData[0].id);
+          setActiveProductId(null);
         }
       }
     } catch (err) {
@@ -256,11 +281,16 @@ export default function DMApp() {
   useEffect(() => {
     if (activeClientId) {
       localStorage.setItem('lastActiveClientId', activeClientId);
-      fetchLeads(activeClientId);
+      if (activeProductId) {
+        localStorage.setItem('lastActiveProductId', activeProductId);
+      } else {
+        localStorage.removeItem('lastActiveProductId');
+      }
+      fetchLeads(activeClientId, activeProductId);
       setActiveLeadId(null);
       setLeadDetails(null);
     }
-  }, [activeClientId]);
+  }, [activeClientId, activeProductId]);
 
   useEffect(() => {
     if (activeLeadId) {
@@ -335,6 +365,19 @@ export default function DMApp() {
       setShowEditClient(false);
     } else {
       toast.error(res.error || 'Failed to edit client');
+    }
+    setIsLoading(false);
+  };
+
+  const handleSyncClients = async () => {
+    setIsLoading(true);
+    toast.info('Syncing clients from tools...');
+    const res = await syncVipscaleClients();
+    if (res.success) {
+      toast.success(`Synced ${res.count} clients from tools!`);
+      await initClients(); // Refresh client list
+    } else {
+      toast.error(res.error || 'Failed to sync clients');
     }
     setIsLoading(false);
   };
@@ -418,16 +461,41 @@ export default function DMApp() {
       toast.success('Knowledge Base saved.');
     } else {
       const parsedStages = clientStagesState.map(s => {
-        let config = [];
-        if (typeof s.checklistConfig === 'string') {
-          try {
-            config = JSON.parse(s.checklistConfig || '[]');
-          } catch(e) {
-            console.error("Invalid JSON in stage", s.stageOrder);
+        let config: any[] = [];
+        
+        // Zero-token regex extraction
+        const match = s.systemPrompt.match(/STAGE ASSESSMENT:([\s\S]+?)(?:IMPORTANT:|FINAL CHECK BEFORE RESPONDING|$)/i);
+        if (match) {
+          const lines = match[1].trim().split('\n').map((l: string) => l.trim()).filter(Boolean);
+          const ignoreKeys = ['Latest Message Sender', 'Current Stage', 'Lead Status', 'Stage Exit Criteria Met', 'Summary'];
+          for (const line of lines) {
+            const parts = line.split(':');
+            if (parts.length >= 2) {
+              const label = parts[0].trim();
+              if (!ignoreKeys.includes(label)) {
+                config.push({
+                  id: label.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
+                  type: line.includes('[Captured / Missing]') ? 'boolean' : 'string',
+                  label: label
+                });
+              }
+            }
           }
-        } else {
-          config = s.checklistConfig || [];
         }
+
+        // Fallback to manual if regex found nothing
+        if (config.length === 0) {
+          if (typeof s.checklistConfig === 'string') {
+            try {
+              config = JSON.parse(s.checklistConfig || '[]');
+            } catch(e) {
+              console.error("Invalid JSON in stage", s.stageOrder);
+            }
+          } else {
+            config = s.checklistConfig || [];
+          }
+        }
+        
         return { ...s, checklistConfig: config };
       });
       const { saveClientStages } = await import('./actions');
@@ -592,6 +660,12 @@ export default function DMApp() {
     );
   }, [leads, searchQuery]);
 
+  const filteredClients = useMemo(() => {
+    if (!clientSearchQuery) return clients;
+    const lowerQuery = clientSearchQuery.toLowerCase();
+    return clients.filter(c => (c.name || '').toLowerCase().includes(lowerQuery));
+  }, [clients, clientSearchQuery]);
+
   return (
     <div className="flex flex-col md:grid h-screen md:grid-cols-[250px_1fr] lg:grid-cols-[280px_1fr_350px] overflow-hidden">
       {/* Sidebar - Leads List */}
@@ -622,33 +696,47 @@ export default function DMApp() {
         
         {/* Scrollable leads list */}
         <ul className="flex-1 overflow-y-auto min-h-0" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-          {filteredLeads.map((lead) => {
-            return (
-            <li 
-              key={lead.id} 
-              className={`flex items-center gap-3 p-4 border-b border-border cursor-pointer transition-colors hover:bg-surface-hover ${activeLeadId === lead.id ? "bg-surface-hover" : ""}`}
-              onClick={() => setActiveLeadId(lead.id)}
-            >
-              <span className="material-symbols-sharp" style={{ color: 'var(--muted)', fontSize: '2rem' }}>
-                account_circle
-              </span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <strong style={{ display: 'block', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                  {lead.name}
-                </strong>
-                {lead.fb_link && (
-                  <div style={{ fontSize: '0.75rem', color: 'var(--primary)', marginTop: '2px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                    {lead.fb_link}
+          {isLoadingLeads ? (
+            Array.from({ length: 5 }).map((_, i) => (
+              <li key={i} className="flex items-center gap-3 p-4 border-b border-border">
+                <div className="w-10 h-10 rounded-full bg-muted animate-pulse shrink-0" />
+                <div className="flex flex-col gap-2 flex-1">
+                  <div className="h-4 bg-muted animate-pulse rounded w-3/4" />
+                  <div className="h-3 bg-muted animate-pulse rounded w-1/2" />
+                </div>
+              </li>
+            ))
+          ) : (
+            <>
+              {filteredLeads.map((lead) => {
+                return (
+                <li 
+                  key={lead.id} 
+                  className={`flex items-center gap-3 p-4 border-b border-border cursor-pointer transition-colors hover:bg-surface-hover ${activeLeadId === lead.id ? "bg-surface-hover" : ""}`}
+                  onClick={() => setActiveLeadId(lead.id)}
+                >
+                  <span className="material-symbols-sharp" style={{ color: 'var(--muted)', fontSize: '2rem' }}>
+                    account_circle
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <strong style={{ display: 'block', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                      {lead.name}
+                    </strong>
+                    {lead.fb_link && (
+                      <div style={{ fontSize: '0.75rem', color: 'var(--primary)', marginTop: '2px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                        {lead.fb_link}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            </li>
-            );
-          })}
-          {filteredLeads.length === 0 && (
-            <div style={{ padding: '1.5rem', color: 'var(--muted)', fontSize: '0.9rem', textAlign: 'center' }}>
-              No leads found.
-            </div>
+                </li>
+                );
+              })}
+              {filteredLeads.length === 0 && (
+                <div style={{ padding: '1.5rem', color: 'var(--muted)', fontSize: '0.9rem', textAlign: 'center' }}>
+                  No leads found.
+                </div>
+              )}
+            </>
           )}
         </ul>
 
@@ -662,30 +750,79 @@ export default function DMApp() {
                 </div>
                 <div className="flex flex-col min-w-0">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Active Client</span>
-                  <span className="font-medium truncate text-sm">{clients.find(c => c.id === activeClientId)?.name || 'Loading...'}</span>
+                  <span className="font-medium truncate text-sm">
+                    {clients.find(c => c.id === activeClientId)?.name || 'Loading...'}
+                  </span>
+                  {activeProductId && (
+                    <span className="text-xs text-muted-foreground truncate">
+                      {clients.find(c => c.id === activeClientId)?.Product?.find((p:any) => p.id === activeProductId)?.product_name}
+                    </span>
+                  )}
                 </div>
               </div>
               <span className="material-symbols-sharp text-muted-foreground">unfold_more</span>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-[240px]">
-              {clients.map(client => (
-                <DropdownMenuItem key={client.id} onClick={() => setActiveClientId(client.id)} className="flex items-center justify-between">
-                  <span>{client.name}</span>
-                  {activeClientId === client.id && <span className="material-symbols-sharp text-primary text-[1.1rem]">check</span>}
-                </DropdownMenuItem>
-              ))}
+            <DropdownMenuContent align="start" className="w-[280px]">
+              <div className="p-2 border-b border-border mb-1">
+                <div className="relative">
+                  <span className="material-symbols-sharp absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground text-[1.1rem]">search</span>
+                  <Input 
+                    autoFocus
+                    placeholder="Search clients..."
+                    value={clientSearchQuery}
+                    onChange={e => setClientSearchQuery(e.target.value)}
+                    onKeyDown={e => e.stopPropagation()}
+                    className="h-8 pl-8 text-xs"
+                  />
+                </div>
+              </div>
+              <div className="max-h-[300px] overflow-y-auto">
+                {filteredClients.length === 0 ? (
+                   <div className="py-3 text-center text-xs text-muted-foreground">No clients found</div>
+                ) : (
+                  filteredClients.map(client => {
+                    const hasProducts = client.Product && client.Product.length > 0;
+                const isActiveClient = activeClientId === client.id;
+                
+                if (hasProducts) {
+                  return (
+                    <DropdownMenuSub key={client.id}>
+                      <DropdownMenuSubTrigger className={`flex items-center justify-between ${isActiveClient ? 'bg-primary/10 text-primary font-medium' : ''}`}>
+                        <span>{client.name}</span>
+                        {isActiveClient && <span className="material-symbols-sharp text-primary text-[1.1rem]">check</span>}
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent>
+                        <DropdownMenuItem onClick={() => { setActiveClientId(client.id); setActiveProductId(null); }} className="flex justify-between font-semibold">
+                          <span>Global Leads (No Product)</span>
+                          {isActiveClient && activeProductId === null && <span className="material-symbols-sharp text-primary text-[1.1rem] ml-2">check</span>}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        {client.Product.map((prod: any) => (
+                          <DropdownMenuItem key={prod.id} onClick={() => { setActiveClientId(client.id); setActiveProductId(prod.id); }} className="flex justify-between">
+                            <span>{prod.product_name}</span>
+                            {isActiveClient && activeProductId === prod.id && <span className="material-symbols-sharp text-primary text-[1.1rem] ml-2">check</span>}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                  );
+                }
+
+                return (
+                  <DropdownMenuItem key={client.id} onClick={() => { setActiveClientId(client.id); setActiveProductId(null); }} className={`flex items-center justify-between ${isActiveClient ? 'bg-primary/10 text-primary font-medium' : ''}`}>
+                    <span>{client.name}</span>
+                    {isActiveClient && <span className="material-symbols-sharp text-primary text-[1.1rem]">check</span>}
+                  </DropdownMenuItem>
+                );
+              }))}
+              </div>
               <div className="h-px bg-border my-1 mx-2" />
-              <DropdownMenuItem onClick={() => {
-                setEditClientName(clients.find(c => c.id === activeClientId)?.name || '');
-                setShowEditClient(true);
-              }}>
-                <span className="material-symbols-sharp mr-2 text-[1.1rem] text-muted-foreground">edit</span>
-                Edit Client Name
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowAddClient(true)}>
-                <span className="material-symbols-sharp mr-2 text-[1.1rem] text-muted-foreground">add</span>
-                Add Client
-              </DropdownMenuItem>
+              {process.env.NODE_ENV === 'development' && (
+                <DropdownMenuItem onClick={handleSyncClients} disabled={isLoading}>
+                  <span className="material-symbols-sharp mr-2 text-[1.1rem] text-muted-foreground">sync</span>
+                  Sync Clients from Tools (Dev Only)
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onClick={openContextModal}>
                 <span className="material-symbols-sharp mr-2 text-[1.1rem] text-muted-foreground">settings</span>
                 Client Settings
@@ -1010,61 +1147,52 @@ export default function DMApp() {
       {/* Client Settings Modal */}
       <Dialog open={showContextModal} onOpenChange={setShowContextModal}>
         <DialogContent className="w-[95vw] sm:max-w-4xl max-h-[90vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6">
-          <DialogHeader>
-            <DialogTitle className="flex justify-between items-center">
+          <DialogHeader className="border-b border-border pb-4 mb-4">
+            <DialogTitle className="flex justify-between items-center text-xl">
               <div className="flex items-center gap-2">
-                <span className="material-symbols-sharp">settings</span>
-                Client Settings
+                <span className="material-symbols-sharp text-primary">settings_applications</span>
+                Client Configuration
               </div>
             </DialogTitle>
-            <DialogDescription>
-              Configure the AI's general knowledge base and its stage-by-stage sales funnel.
+            <DialogDescription className="text-sm pt-2">
+              Configure the AI's global knowledge base and its stage-by-stage sales funnel for this client.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex gap-4 border-b border-border mb-4">
+          <div className="flex gap-6 border-b border-border mb-6">
             <button 
-              className={`pb-2 px-1 border-b-2 font-medium text-sm transition-colors ${activeSettingsTab === 'knowledge' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+              className={`pb-3 px-2 border-b-2 font-semibold text-sm transition-colors flex items-center gap-2 ${activeSettingsTab === 'knowledge' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
               onClick={() => setActiveSettingsTab('knowledge')}
             >
-              Knowledge Base
+              <span className="material-symbols-sharp text-[1.2rem]">menu_book</span>
+              Global Knowledge Base
             </button>
             <button 
-              className={`pb-2 px-1 border-b-2 font-medium text-sm transition-colors ${activeSettingsTab === 'funnel' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+              className={`pb-3 px-2 border-b-2 font-semibold text-sm transition-colors flex items-center gap-2 ${activeSettingsTab === 'funnel' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
               onClick={() => setActiveSettingsTab('funnel')}
             >
-              Funnel Config
+              <span className="material-symbols-sharp text-[1.2rem]">account_tree</span>
+              Funnel Stages & Prompts
             </button>
           </div>
 
           {activeSettingsTab === 'knowledge' ? (
             <div className="flex flex-col">
-              <div className="flex gap-2 mb-4 justify-end">
-                <Button type="button" variant="secondary" size="sm" onClick={() => contextInputRef.current?.click()} title="Read .txt/.csv into text">
-                  Upload .txt
-                </Button>
+              <div className="flex justify-between items-center mb-4">
+                <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Additional Context Files (Optional)</h4>
                 <Button type="button" variant="secondary" size="sm" onClick={() => {
                   const input = document.createElement('input');
                   input.type = 'file';
                   input.onchange = (e) => handleContextFileUploadR2(e as unknown as React.ChangeEvent<HTMLInputElement>);
                   input.click();
                 }} title="Upload File to R2">
+                  <span className="material-symbols-sharp mr-1 text-[1.1rem]">upload_file</span>
                   Upload File
                 </Button>
               </div>
-
-              <input type="file" ref={contextInputRef} className="hidden" accept=".txt,.md,.csv" onChange={handleContextUpload} />
               
-              <Textarea 
-                className="min-h-[300px] resize-y mb-6 font-mono text-sm"
-                placeholder="Paste business rules, pricing, products, or FAQs for this client..."
-                value={contextText}
-                onChange={e => setContextText(e.target.value)}
-              />
-
               {contextUrls.length > 0 && (
                 <div className="mb-6">
-                  <h4 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">Attached Context Files</h4>
                   <ul className="space-y-2">
                     {contextUrls.map((url, i) => {
                       const filename = url.split('/').pop() || url;
@@ -1083,61 +1211,113 @@ export default function DMApp() {
                   </ul>
                 </div>
               )}
+
+              {(() => {
+                const currentClient = clients.find(c => c.id === activeClientId);
+                const currentProduct = currentClient?.Product?.find((p:any) => p.id === activeProductId);
+                if (!currentProduct) return null;
+                
+                return (
+                  <div className="mb-6 p-4 rounded-md border border-primary/20 bg-primary/5">
+                    <h4 className="text-sm font-semibold mb-3 text-primary uppercase tracking-wider flex items-center gap-2">
+                      <span className="material-symbols-sharp text-[1.1rem]">inventory_2</span>
+                      Product PVPs
+                    </h4>
+                    <div className="text-sm space-y-3 text-foreground">
+                      <div>
+                        <strong className="text-muted-foreground block text-xs mb-1">Product Name</strong>
+                        {currentProduct.product_name}
+                      </div>
+                      <div>
+                        <strong className="text-muted-foreground block text-xs mb-1">Value Proposition (VPS)</strong>
+                        <p className="whitespace-pre-wrap text-[13px]">{currentProduct.vps || 'None provided'}</p>
+                      </div>
+                      <div>
+                        <strong className="text-muted-foreground block text-xs mb-1">Target Persona</strong>
+                        <p className="whitespace-pre-wrap text-[13px]">{currentProduct.persona || 'None provided'}</p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-3 italic border-t border-primary/10 pt-2">
+                      This information is automatically injected into the AI's prompt when generating drafts for this product's leads.
+                    </p>
+                  </div>
+                );
+              })()}
+
+              {(() => {
+                if (!activeProductId) {
+                  return (
+                    <div className="flex flex-col items-center justify-center py-12 text-muted-foreground bg-secondary/10 rounded-lg border border-border border-dashed">
+                      <span className="material-symbols-sharp text-4xl mb-3 opacity-50">inventory_2</span>
+                      <p className="text-sm">Select a specific product from the client dropdown to view its PVPs here.</p>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
             </div>
           ) : (
-            <div className="space-y-6">
+             <div className="space-y-6">
                <div className="flex justify-between items-center">
                  <p className="text-sm text-muted-foreground">Define custom stages and the AI instruction for each stage.</p>
-                 <Button onClick={handleAddStage} size="sm"><span className="material-symbols-sharp mr-1">add</span> Add Stage</Button>
+                 <Button onClick={() => {
+                   handleAddStage();
+                   setActiveStageIndex(clientStagesState.length);
+                 }} size="sm"><span className="material-symbols-sharp mr-1">add</span> Add Stage</Button>
                </div>
                
-               {clientStagesState.map((stage, idx) => (
-                 <div key={idx} className="border border-border rounded-md p-4 bg-secondary/20 relative group">
-                   <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 mb-4">
-                     <span className="font-bold shrink-0">Stage {stage.stageOrder}</span>
-                     <Input 
-                       value={stage.stageName} 
+               <div className="flex gap-2 overflow-x-auto pb-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                 {clientStagesState.map((stage, idx) => (
+                   <button
+                     key={idx}
+                     onClick={() => setActiveStageIndex(idx)}
+                     className={`px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${activeStageIndex === idx ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'}`}
+                   >
+                     Stage {stage.stageOrder}
+                   </button>
+                 ))}
+               </div>
+
+               {clientStagesState.length > 0 && clientStagesState[activeStageIndex] && (() => {
+                 const stage = clientStagesState[activeStageIndex];
+                 const idx = activeStageIndex;
+                 return (
+                   <div key={idx} className="border border-border rounded-md p-4 bg-secondary/20 relative group">
+                     <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 mb-4">
+                       <span className="font-bold shrink-0">Stage {stage.stageOrder}</span>
+                       <Input 
+                         value={stage.stageName} 
+                         onChange={(e) => {
+                           const copy = [...clientStagesState];
+                           copy[idx].stageName = e.target.value;
+                           setClientStagesState(copy);
+                         }}
+                         placeholder="Stage Name"
+                         className="w-full sm:max-w-[300px]"
+                       />
+                       <Button variant="ghost" size="icon" className="text-destructive sm:ml-auto opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity self-end sm:self-auto shrink-0" onClick={() => {
+                         const copy = clientStagesState.filter((_, i) => i !== idx);
+                         copy.forEach((s, i) => s.stageOrder = i + 1);
+                         setClientStagesState(copy);
+                         setActiveStageIndex(Math.max(0, idx - 1));
+                       }}><span className="material-symbols-sharp">delete</span></Button>
+                     </div>
+                     
+                     <Label className="mb-2 block text-sm font-medium">System Prompt</Label>
+                     <Textarea 
+                       value={stage.systemPrompt}
                        onChange={(e) => {
                          const copy = [...clientStagesState];
-                         copy[idx].stageName = e.target.value;
+                         copy[idx].systemPrompt = e.target.value;
                          setClientStagesState(copy);
                        }}
-                       placeholder="Stage Name"
-                       className="w-full sm:max-w-[300px]"
+                       className="min-h-[250px] font-mono text-xs mb-4 resize-y bg-background"
+                       placeholder="You are an AI assistant..."
                      />
-                     <Button variant="ghost" size="icon" className="text-destructive sm:ml-auto opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity self-end sm:self-auto shrink-0" onClick={() => {
-                       const copy = clientStagesState.filter((_, i) => i !== idx);
-                       copy.forEach((s, i) => s.stageOrder = i + 1);
-                       setClientStagesState(copy);
-                     }}><span className="material-symbols-sharp">delete</span></Button>
                    </div>
-                   
-                   <Label className="mb-2 block text-sm font-medium">System Prompt</Label>
-                   <Textarea 
-                     value={stage.systemPrompt}
-                     onChange={(e) => {
-                       const copy = [...clientStagesState];
-                       copy[idx].systemPrompt = e.target.value;
-                       setClientStagesState(copy);
-                     }}
-                     className="min-h-[250px] font-mono text-xs mb-4 resize-y bg-background"
-                     placeholder="You are an AI assistant..."
-                   />
-
-                   <Label className="mb-2 block text-sm font-medium">Checklist Config (JSON Array)</Label>
-                   <Textarea 
-                     value={typeof stage.checklistConfig === 'string' ? stage.checklistConfig : JSON.stringify(stage.checklistConfig, null, 2)}
-                     onChange={(e) => {
-                       const copy = [...clientStagesState];
-                       copy[idx].checklistConfig = e.target.value;
-                       setClientStagesState(copy);
-                     }}
-                     className="min-h-[120px] font-mono text-xs bg-muted text-muted-foreground resize-y"
-                     placeholder={'[\n  { "id": "budget", "label": "Budget Captured", "type": "boolean" }\n]'}
-                   />
-                 </div>
-               ))}
-            </div>
+                 );
+               })()}
+             </div>
           )}
           
           <DialogFooter className="mt-4 pt-4 border-t border-border">

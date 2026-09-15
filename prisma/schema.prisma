@@ -16,6 +16,19 @@ model Client {
   updatedAt   DateTime      @updatedAt
   Lead        Lead[]
   ClientStage ClientStage[]
+  Product   Product[]
+}
+
+model Product {
+  id           String   @id
+  client_id    String
+  product_name String
+  vps          String?
+  persona      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  Client       Client   @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  Lead         Lead[]
 }
 
 model ClientStage {
@@ -51,10 +64,12 @@ model Lead {
   name            String            @default("Unknown Lead")
   fb_link         String?
   client_id       String
+  product_id      String?
   createdAt       DateTime          @default(now())
   updatedAt       DateTime
   Conversation    Conversation[]
   Client          Client            @relation(fields: [client_id], references: [id])
+  Product         Product?          @relation(fields: [product_id], references: [id])
   LeadState       LeadState?
   StageTransition StageTransition[]
 }
