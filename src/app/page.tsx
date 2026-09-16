@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
-import { getLeads, getLeadDetails, generateDraftResponse, addLead, getPresignedUrl, sendLeadMessage, saveClientContext, uploadFileToR2, getGlobalClient, getPromptForStage, editLead, removeLead, editConversationMessage, learnFromCorrection, deleteMessage, getClients, addClient, getClientStage, editClient, getClientStages, saveClientStages, syncVipscaleClients } from './actions';
+import { getLeads, editLeadMemory, editStructuredLeadMemory, insertConversationMessage, getLeadDetails, generateDraftResponse, addLead, getPresignedUrl, sendLeadMessage, saveClientContext, uploadFileToR2, getGlobalClient, getPromptForStage, editLead, removeLead, editConversationMessage, learnFromCorrection, deleteMessage, getClients, addClient, getClientStage, editClient, getClientStages, saveClientStages, syncVipscaleClients } from './actions';
 import { Button } from "@/components/ui/button";
+import Loader from "@/components/ui/loader";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -17,7 +18,7 @@ import { DropdownMenu, DropdownMenuContent,  DropdownMenuItem, DropdownMenuTrigg
   DropdownMenuSubContent
 } from "@/components/ui/dropdown-menu";
 
-const RightSidebarContent = ({ leadDetails, activeStageConfig, handleShowDebugPrompt, setEditLeadName, setEditLeadFbLink, setShowEditLead, setShowDeleteLead }: any) => {
+const RightSidebarContent = ({ activeLeadId, leadDetails, activeStageConfig, handleShowDebugPrompt, setEditLeadName, setEditLeadFbLink, setShowEditLead, setShowDeleteLead }: any) => {
   return (
     <>
       <div className="flex-1 overflow-y-auto min-h-0" style={{ padding: '1.5rem' }}>
@@ -46,7 +47,7 @@ const RightSidebarContent = ({ leadDetails, activeStageConfig, handleShowDebugPr
               </div>
             </div>
 
-            {activeStageConfig?.checklistConfig && activeStageConfig.checklistConfig.length > 0 && (
+            {activeStageConfig?.checklistConfig && activeStageConfig.checklistConfig.length > 0 ? (
               <div className="bg-background border border-border rounded-md p-4 mb-6">
                 <h3><span className="material-symbols-sharp" style={{ fontSize: '1.2rem' }}>fact_check</span> Stage {leadDetails.LeadState.stage} Assessment</h3>
                 
@@ -75,6 +76,16 @@ const RightSidebarContent = ({ leadDetails, activeStageConfig, handleShowDebugPr
                 })}
 
                 <div className="mt-4 pt-3 border-t border-border flex flex-col gap-1">
+                  <span className="text-muted-foreground" style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Summary</span>
+                  <span className="text-sm font-medium">{leadDetails.LeadState.leadSummary || 'No summary yet.'}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-background border border-border rounded-md p-4 mb-6">
+                <h3><span className="material-symbols-sharp" style={{ fontSize: '1.2rem' }}>fact_check</span> Stage {leadDetails.LeadState.stage} Assessment</h3>
+                <div className="text-sm text-muted-foreground italic mb-4">No checklist criteria defined for this stage.</div>
+                
+                <div className="pt-3 border-t border-border flex flex-col gap-1">
                   <span className="text-muted-foreground" style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Summary</span>
                   <span className="text-sm font-medium">{leadDetails.LeadState.leadSummary || 'No summary yet.'}</span>
                 </div>
@@ -175,6 +186,22 @@ export default function DMApp() {
   const [isLoadingLeads, setIsLoadingLeads] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [clientSearchQuery, setClientSearchQuery] = useState('');
+  
+  // Edit Structured Memory Modal State
+  const [showEditMemory, setShowEditMemory] = useState(false);
+  const [editMemoryLeadId, setEditMemoryLeadId] = useState('');
+  const [editMemoryStage, setEditMemoryStage] = useState(1);
+  const [editMemoryConnection, setEditMemoryConnection] = useState('LOW');
+  const [editMemoryIntent, setEditMemoryIntent] = useState('');
+  const [editMemoryAssessment, setEditMemoryAssessment] = useState<any>({});
+  const [editMemoryConversations, setEditMemoryConversations] = useState<any[]>([]);
+  const [editMemoryText, setEditMemoryText] = useState('');
+  const [isMemoryLoading, setIsMemoryLoading] = useState(false);
+  const [insertTargetMsgId, setInsertTargetMsgId] = useState<string | null | undefined>(undefined);
+  const [insertRole, setInsertRole] = useState<'user' | 'assistant' | 'stage'>('user');
+  const [insertContent, setInsertContent] = useState('');
+  const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
+  const [editingMsgContent, setEditingMsgContent] = useState('');
   
   const [activeSettingsTab, setActiveSettingsTab] = useState<'knowledge' | 'funnel'>('knowledge');
   const [clientStagesState, setClientStagesState] = useState<any[]>([]);
@@ -712,8 +739,13 @@ export default function DMApp() {
                 return (
                 <li 
                   key={lead.id} 
-                  className={`flex items-center gap-3 p-4 border-b border-border cursor-pointer transition-colors hover:bg-surface-hover ${activeLeadId === lead.id ? "bg-surface-hover" : ""}`}
-                  onClick={() => setActiveLeadId(lead.id)}
+                  className={`flex items-center gap-3 p-4 border-b border-border cursor-pointer transition-colors hover:bg-surface-hover group ${activeLeadId === lead.id ? "bg-surface-hover" : ""}`}
+                  onClick={() => {
+                    if (activeLeadId !== lead.id) {
+                      setActiveLeadId(lead.id);
+                      setLeadDetails(null);
+                    }
+                  }}
                 >
                   <span className="material-symbols-sharp" style={{ color: 'var(--muted)', fontSize: '2rem' }}>
                     account_circle
@@ -727,6 +759,33 @@ export default function DMApp() {
                         {lead.fb_link}
                       </div>
                     )}
+                  </div>
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger className="h-8 w-8 inline-flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-muted text-muted-foreground outline-none">
+                        <span className="material-symbols-sharp text-[1.2rem]">more_horiz</span>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="min-w-[14rem]">
+                        <DropdownMenuItem onClick={async (e) => {
+                          e.stopPropagation();
+                          setEditMemoryLeadId(lead.id);
+                          setEditMemoryText(lead.LeadState?.leadSummary || '');
+                          setEditMemoryStage(lead.LeadState?.stage || 1);
+                          setEditMemoryConnection(lead.LeadState?.connectionLevel || 'LOW');
+                          setEditMemoryIntent(lead.LeadState?.primary_intent_id || '');
+                          setEditMemoryAssessment(lead.LeadState?.assessmentData || {});
+                          setShowEditMemory(true);
+                          // Load conversation history for Timeline Editor
+                          setIsMemoryLoading(true);
+                          const data = await getLeadDetails(lead.id);
+                          setEditMemoryConversations(data?.Conversation || []);
+                          setIsMemoryLoading(false);
+                        }}>
+                          <span className="material-symbols-sharp mr-2 text-[1.1rem]">memory</span>
+                          Edit Long Term Memory
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </li>
                 );
@@ -862,6 +921,7 @@ export default function DMApp() {
               <Sheet open={showMobileDetails} onOpenChange={setShowMobileDetails}>
                 <SheetContent side="right" className="w-[85vw] sm:w-[400px] overflow-y-auto bg-card p-0 flex flex-col h-full border-l border-border">
                   <RightSidebarContent 
+                    activeLeadId={activeLeadId}
                     leadDetails={leadDetails}
                     activeStageConfig={activeStageConfig}
                     handleShowDebugPrompt={handleShowDebugPrompt}
@@ -1009,6 +1069,11 @@ export default function DMApp() {
               </div>
             </div>
           </>
+        ) : activeLeadId ? (
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-4">
+             <Loader />
+             <p className="text-sm font-medium mt-4">Loading lead...</p>
+          </div>
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-4">
              <span className="material-symbols-sharp text-5xl opacity-20">forum</span>
@@ -1020,6 +1085,7 @@ export default function DMApp() {
       {/* Right Sidebar - State Inspector (Desktop) */}
       <aside className="hidden lg:flex flex-col h-full bg-surface border-l border-border min-h-0" >
         <RightSidebarContent 
+          activeLeadId={activeLeadId}
           leadDetails={leadDetails}
           activeStageConfig={activeStageConfig}
           handleShowDebugPrompt={handleShowDebugPrompt}
@@ -1074,6 +1140,280 @@ export default function DMApp() {
       </Dialog>
 
       {/* Edit Lead Modal */}
+      <Dialog open={showEditMemory} onOpenChange={setShowEditMemory}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <span className="material-symbols-sharp text-primary">memory</span>
+              Edit Long Term Memory
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-4 py-4">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="memory">Memory Summary</Label>
+              <Textarea
+                id="memory"
+                value={editMemoryText}
+                onChange={(e) => setEditMemoryText(e.target.value)}
+                placeholder="Enter long term memory / summary..."
+                className="min-h-[150px]"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowEditMemory(false)}>Cancel</Button>
+            <Button onClick={async () => {
+              const res = await editLeadMemory(editMemoryLeadId, editMemoryText);
+              // Optimistically update the active lead details if it's currently selected
+              if (activeLeadId === editMemoryLeadId) {
+                setLeadDetails((prev: any) => ({
+                  ...prev,
+                  LeadState: {
+                    ...prev.LeadState,
+                    leadSummary: editMemoryText
+                  }
+                }));
+              }
+              setShowEditMemory(false);
+              toast.success("Long term memory updated");
+            }}>Save Changes</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Structured Memory Modal */}
+      <Dialog open={showEditMemory} onOpenChange={setShowEditMemory}>
+        <DialogContent className="w-[90vw] sm:max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <span className="material-symbols-sharp text-primary">history_edu</span>
+              Timeline Editor
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 py-2">
+            {isMemoryLoading ? (
+              <div className="text-sm text-muted-foreground animate-pulse py-8 text-center">Loading conversation history...</div>
+            ) : editMemoryConversations.length === 0 ? (
+              <div className="text-sm text-muted-foreground py-8 text-center">No messages in this conversation yet.</div>
+            ) : (
+              <div className="space-y-2 max-h-[65vh] overflow-y-auto pr-2 custom-scrollbar">
+                {/* Insert at top */}
+                <div className="flex justify-center py-1 opacity-0 hover:opacity-100 transition-opacity z-10 relative">
+                  <Button size="sm" variant="outline" className="h-6 rounded-full text-xs bg-background border-border shadow-sm" onClick={() => setInsertTargetMsgId(null)}>
+                    <span className="material-symbols-sharp text-[1rem]">add</span>
+                  </Button>
+                </div>
+
+                {insertTargetMsgId === null && (
+                  <div className="bg-secondary/40 p-3 rounded-md border border-border flex flex-col gap-2 shadow-inner">
+                    <div className="flex gap-2">
+                      <Button variant={insertRole === 'user' ? 'default' : 'outline'} size="sm" onClick={() => setInsertRole('user')} className="h-7 text-xs">Lead</Button>
+                      <Button variant={insertRole === 'assistant' ? 'default' : 'outline'} size="sm" onClick={() => setInsertRole('assistant')} className="h-7 text-xs">AI Draft</Button>
+                      <Button variant={insertRole === 'stage' ? 'default' : 'outline'} size="sm" onClick={() => setInsertRole('stage')} className="h-7 text-xs">Stage Marker</Button>
+                    </div>
+                    {insertRole === 'stage' ? (
+                      <select 
+                        value={insertContent} 
+                        onChange={e => setInsertContent(e.target.value)}
+                        className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                      >
+                        <option value="">-- Select Stage --</option>
+                        {[1, 2, 3, 4, 5, 6].map(num => (
+                          <option key={num} value={`[[STAGE_MARKER:${num}]]`}>Stage {num}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <Textarea value={insertContent} onChange={e => setInsertContent(e.target.value)} placeholder="Type new message..." className="text-sm min-h-[60px]" />
+                    )}
+                    <div className="flex justify-end gap-2 mt-1">
+                      <Button variant="outline" size="sm" onClick={() => { setInsertTargetMsgId(undefined); setInsertContent(''); }} className="h-7 text-xs">Cancel</Button>
+                      <Button size="sm" className="h-7 text-xs" onClick={async () => {
+                        if (!insertContent.trim()) return;
+                        await insertConversationMessage(editMemoryLeadId, insertRole === 'stage' ? 'assistant' : insertRole, insertContent, null);
+                        setInsertTargetMsgId(undefined);
+                        setInsertContent('');
+                        toast.success('Message inserted');
+                        const data = await getLeadDetails(editMemoryLeadId);
+                        setEditMemoryConversations(data?.Conversation || []);
+                        if (activeLeadId === editMemoryLeadId) {
+                          const activeData = await getLeadDetails(activeLeadId);
+                          setLeadDetails(JSON.parse(JSON.stringify(activeData)));
+                        }
+                      }}>Insert</Button>
+                    </div>
+                  </div>
+                )}
+
+                  {editMemoryConversations.map((msg: any) => (
+                    <React.Fragment key={msg.id.toString()}>
+                      {(() => {
+                        if (msg.content.startsWith('[[STAGE_MARKER:')) {
+                          const stageNum = msg.content.match(/\d+/)?.[0] || '?';
+                          return (
+                            <div className="flex items-center gap-4 py-4 group relative">
+                              <div className="flex-1 h-[1px] bg-border"></div>
+                              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground bg-background px-3 border border-border rounded-full shadow-sm">
+                                Stage {stageNum} Started Here
+                              </span>
+                              <div className="flex-1 h-[1px] bg-border"></div>
+                              
+                              <Button 
+                                variant="ghost" 
+                                size="icon" 
+                                className="absolute right-0 opacity-0 group-hover:opacity-100 h-6 w-6 text-destructive bg-background shadow-sm border border-border rounded-full"
+                                onClick={async () => {
+                                  if (!confirm('Remove this stage marker?')) return;
+                                  await editConversationMessage(msg.id.toString(), '__DELETE__');
+                                  toast.success('Marker removed');
+                                  const data = await getLeadDetails(editMemoryLeadId);
+                                  setEditMemoryConversations(data?.Conversation || []);
+                                }}
+                              >
+                                <span className="material-symbols-sharp text-[0.9rem]">close</span>
+                              </Button>
+                            </div>
+                          );
+                        }
+                        
+                        return (
+                          <div
+                            className={`flex items-start gap-3 p-3 rounded-md border shadow-sm group cursor-pointer transition-colors ${editingMsgId === msg.id.toString() ? 'bg-primary/5 border-primary/30' : 'bg-card border-border hover:border-primary/20 hover:bg-card/80'}`}
+                            onClick={() => {
+                              if (editingMsgId === msg.id.toString()) {
+                                setEditingMsgId(null);
+                              } else {
+                                setEditingMsgId(msg.id.toString());
+                                setEditingMsgContent(msg.content);
+                              }
+                            }}
+                          >
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0 mt-0.5 tracking-wider ${msg.role === 'user' ? 'bg-primary/20 text-primary' : 'bg-muted text-muted-foreground'}`}>
+                              {msg.role === 'user' ? 'Lead' : 'AI'}
+                            </span>
+                            <div className="text-sm break-words flex-1 whitespace-pre-wrap text-foreground">
+                              {editingMsgId === msg.id.toString() ? (
+                                <div className="flex flex-col gap-2" onClick={e => e.stopPropagation()}>
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <span className="text-xs text-muted-foreground">Role:</span>
+                                    <Button
+                                      variant={msg.role === 'user' ? 'default' : 'outline'} size="sm"
+                                      className="h-6 text-xs"
+                                      onClick={async () => {
+                                        const newRole = msg.role === 'user' ? 'assistant' : 'user';
+                                        await editConversationMessage(msg.id.toString(), editingMsgContent, newRole);
+                                        toast.success('Role updated');
+                                        const data = await getLeadDetails(editMemoryLeadId);
+                                        setEditMemoryConversations(data?.Conversation || []);
+                                        if (activeLeadId === editMemoryLeadId) {
+                                          const activeData = await getLeadDetails(activeLeadId);
+                                          setLeadDetails(JSON.parse(JSON.stringify(activeData)));
+                                        }
+                                        setEditingMsgId(null);
+                                      }}
+                                    >
+                                      Switch to {msg.role === 'user' ? 'AI' : 'Lead'}
+                                    </Button>
+                                  </div>
+                                  <Textarea value={editingMsgContent} onChange={e => setEditingMsgContent(e.target.value)} className="text-sm min-h-[60px]" />
+                                  <div className="flex justify-between gap-2">
+                                    <Button variant="ghost" size="sm" className="h-7 text-xs text-destructive hover:text-destructive" onClick={async () => {
+                                      if (!confirm('Delete this message?')) return;
+                                      await editConversationMessage(msg.id.toString(), '__DELETE__');
+                                      setEditingMsgId(null);
+                                      toast.success('Message deleted');
+                                      const data = await getLeadDetails(editMemoryLeadId);
+                                      setEditMemoryConversations(data?.Conversation || []);
+                                      if (activeLeadId === editMemoryLeadId) {
+                                        const activeData = await getLeadDetails(activeLeadId);
+                                        setLeadDetails(JSON.parse(JSON.stringify(activeData)));
+                                      }
+                                    }}>
+                                      <span className="material-symbols-sharp text-[1rem] mr-1">delete</span>Delete
+                                    </Button>
+                                    <div className="flex gap-2">
+                                      <Button variant="outline" size="sm" onClick={() => setEditingMsgId(null)} className="h-7 text-xs">Cancel</Button>
+                                      <Button size="sm" className="h-7 text-xs" onClick={async () => {
+                                        if (!editingMsgContent.trim()) return;
+                                        await editConversationMessage(msg.id.toString(), editingMsgContent);
+                                        setEditingMsgId(null);
+                                        toast.success('Message updated');
+                                        const data = await getLeadDetails(editMemoryLeadId);
+                                        setEditMemoryConversations(data?.Conversation || []);
+                                        if (activeLeadId === editMemoryLeadId) {
+                                          const activeData = await getLeadDetails(activeLeadId);
+                                          setLeadDetails(JSON.parse(JSON.stringify(activeData)));
+                                        }
+                                      }}>Save</Button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : (
+                                msg.content
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                    {/* Insert after msg */}
+                    <div className="flex justify-center py-1 opacity-0 hover:opacity-100 transition-opacity z-10 relative">
+                      <Button size="sm" variant="outline" className="h-6 rounded-full text-xs bg-background border-border shadow-sm" onClick={() => setInsertTargetMsgId(msg.id.toString())}>
+                        <span className="material-symbols-sharp text-[1rem]">add</span>
+                      </Button>
+                    </div>
+
+                    {insertTargetMsgId === msg.id.toString() && (
+                      <div className="bg-secondary/40 p-3 rounded-md border border-border flex flex-col gap-2 shadow-inner">
+                        <div className="flex gap-2">
+                          <Button variant={insertRole === 'user' ? 'default' : 'outline'} size="sm" onClick={() => setInsertRole('user')} className="h-7 text-xs">Lead</Button>
+                          <Button variant={insertRole === 'assistant' ? 'default' : 'outline'} size="sm" onClick={() => setInsertRole('assistant')} className="h-7 text-xs">AI Draft</Button>
+                          <Button variant={insertRole === 'stage' ? 'default' : 'outline'} size="sm" onClick={() => setInsertRole('stage')} className="h-7 text-xs">Stage Marker</Button>
+                        </div>
+                        {insertRole === 'stage' ? (
+                          <select 
+                            value={insertContent} 
+                            onChange={e => setInsertContent(e.target.value)}
+                            className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                          >
+                            <option value="">-- Select Stage --</option>
+                            {[1, 2, 3, 4, 5, 6].map(num => (
+                              <option key={num} value={`[[STAGE_MARKER:${num}]]`}>Stage {num}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <Textarea value={insertContent} onChange={e => setInsertContent(e.target.value)} placeholder="Type new message..." className="text-sm min-h-[60px]" />
+                        )}
+                        <div className="flex justify-end gap-2 mt-1">
+                          <Button variant="outline" size="sm" onClick={() => { setInsertTargetMsgId(undefined); setInsertContent(''); }} className="h-7 text-xs">Cancel</Button>
+                          <Button size="sm" className="h-7 text-xs" onClick={async () => {
+                            if (!insertContent.trim()) return;
+                            await insertConversationMessage(editMemoryLeadId, insertRole === 'stage' ? 'assistant' : insertRole, insertContent, msg.id.toString());
+                            setInsertTargetMsgId(undefined);
+                            setInsertContent('');
+                            toast.success('Message inserted');
+                            const data = await getLeadDetails(editMemoryLeadId);
+                            setEditMemoryConversations(data?.Conversation || []);
+                            if (activeLeadId === editMemoryLeadId) {
+                              const activeData = await getLeadDetails(activeLeadId);
+                              setLeadDetails(JSON.parse(JSON.stringify(activeData)));
+                            }
+                          }}>Insert</Button>
+                        </div>
+                      </div>
+                    )}
+                  </React.Fragment>
+                ))}
+              </div>
+            )}
+          </div>
+          <DialogFooter className="mt-2">
+            <Button variant="outline" onClick={() => setShowEditMemory(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+
+
       <Dialog open={showEditLead} onOpenChange={setShowEditLead}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>

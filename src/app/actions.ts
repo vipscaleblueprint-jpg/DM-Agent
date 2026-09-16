@@ -210,7 +210,10 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
     orderBy: { createdAt: 'asc' },
   });
 
-  let chatHistoryStr = conversations.map(c => `[${c.createdAt.toISOString()}] ${c.role.toUpperCase()}: ${c.content}`).join('\n\n');
+  let chatHistoryStr = conversations
+    .filter(c => !c.content.startsWith('[[STAGE_MARKER:'))
+    .map(c => `[${c.createdAt.toISOString()}] ${c.role.toUpperCase()}: ${c.content}`)
+    .join('\n\n');
 
   if (conversations.length > 0 && conversations[conversations.length - 1].role === 'assistant') {
     chatHistoryStr += `\n\n[SYSTEM NOTE]: The lead has NOT responded to your last message. The current time is now ${simulatedTime || new Date().toISOString()}. Follow the guidelines for unanswered messages.`;
@@ -222,11 +225,16 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
   const systemPrompt = `
 ${await getPromptForStage(stage, clientId)}
 
+CRITICAL INSTRUCTION FOR MANUAL ROLLBACKS:
+You are currently in Stage ${stage}. If the chat history shows that you have previously taken actions or sent messages that belong to a later stage (for example, pitching a product when you should currently be building curiosity), IGNORE THOSE PAST MESSAGES. The user has manually overridden your memory state to force you back to Stage ${stage}. You must strictly follow the Stage ${stage} objective above, as if the future actions in the chat history never happened. Do not apologize or awkwardly try to restart a conversation; just smoothly pick up the conversation from the current context while strictly adhering to your Stage ${stage} objective.
+
 Current Time: ${simulatedTime || new Date().toISOString()}
 
 Current Lead Profile:
 Name: ${lead?.name || 'Unknown'}
 Stage: ${stage} (${stageName})
+Long Term Memory (Summary & Context):
+${leadState?.leadSummary || 'No long term memory recorded yet.'}
 Assessment Data Captured So Far:
 ${JSON.stringify(leadState?.assessmentData || {}, null, 2)}
 
@@ -291,6 +299,7 @@ Output JSON according to the schema.
       data: {
         stage: object.next_stage,
         stageName: await resolveStageName(object.next_stage, object.stage_name, clientId),
+        primary_intent_id: (object.primary_intent && object.primary_intent !== 'unknown' && object.primary_intent !== 'other') ? object.primary_intent : null,
         connectionLevel: object.connection_level === 'LOW' || object.connection_level === 'MEDIUM' || object.connection_level === 'HIGH' ? object.connection_level : undefined,
         lastStageChangeReason: object.reason,
         leadSummary: object.summary,
@@ -465,10 +474,80 @@ export async function removeLead(leadId: string) {
   revalidatePath('/');
 }
 
-export async function editConversationMessage(msgIdStr: string, newContent: string) {
-  await prisma.conversation.update({
-    where: { id: BigInt(msgIdStr) },
-    data: { content: newContent }
+export async function editConversationMessage(msgIdStr: string, newContent: string, newRole?: 'user' | 'assistant') {
+  if (newContent === '__DELETE__') {
+    await prisma.conversation.delete({ where: { id: BigInt(msgIdStr) } });
+  } else {
+    const data: any = { content: newContent };
+    if (newRole) data.role = newRole;
+    await prisma.conversation.update({
+      where: { id: BigInt(msgIdStr) },
+      data
+    });
+  }
+  revalidatePath('/');
+}
+
+export async function editLeadMemory(leadId: string, leadSummary: string) {
+  await prisma.leadState.update({
+    where: { lead_id: leadId },
+    data: { leadSummary }
+  });
+  revalidatePath('/');
+}
+
+export async function editStructuredLeadMemory(leadId: string, stage: number, connectionLevel: string, intentId: string, assessmentData: any) {
+  const data: any = {
+    stage,
+    connectionLevel,
+    assessmentData
+  };
+  if (intentId) {
+    data.primary_intent_id = BigInt(intentId);
+  }
+  await prisma.leadState.update({
+    where: { lead_id: leadId },
+    data
+  });
+  revalidatePath('/');
+}
+
+export async function insertConversationMessage(leadId: string, role: 'user' | 'assistant', content: string, insertAfterMsgId?: string | null) {
+  let createdAt = new Date();
+
+  if (insertAfterMsgId) {
+    const afterMsg = await prisma.conversation.findUnique({ where: { id: BigInt(insertAfterMsgId) } });
+    if (afterMsg) {
+      const nextMsg = await prisma.conversation.findFirst({
+        where: { lead_id: leadId, createdAt: { gt: afterMsg.createdAt } },
+        orderBy: { createdAt: 'asc' }
+      });
+      if (nextMsg) {
+        // Average the times
+        createdAt = new Date((afterMsg.createdAt.getTime() + nextMsg.createdAt.getTime()) / 2);
+      } else {
+        // Add 1 second
+        createdAt = new Date(afterMsg.createdAt.getTime() + 1000);
+      }
+    }
+  } else {
+    // Insert at the very beginning
+    const firstMsg = await prisma.conversation.findFirst({
+      where: { lead_id: leadId },
+      orderBy: { createdAt: 'asc' }
+    });
+    if (firstMsg) {
+      createdAt = new Date(firstMsg.createdAt.getTime() - 1000);
+    }
+  }
+
+  await prisma.conversation.create({
+    data: {
+      lead_id: leadId,
+      role,
+      content,
+      createdAt
+    }
   });
   revalidatePath('/');
 }
