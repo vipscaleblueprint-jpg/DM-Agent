@@ -694,29 +694,29 @@ export default function DMApp() {
   }, [clients, clientSearchQuery]);
 
   return (
-    <div className="flex flex-col md:grid h-screen md:grid-cols-[250px_1fr] lg:grid-cols-[280px_1fr_350px] overflow-hidden">
+    <div className="flex-1 flex flex-col md:grid h-full min-h-0 md:grid-cols-[250px_1fr] lg:grid-cols-[280px_1fr_350px] overflow-hidden">
       {/* Sidebar - Leads List */}
-      <aside className={`flex flex-col h-full bg-card border-r border-border ${activeLeadId ? 'hidden md:flex' : 'flex'}`} >
+      <aside className={`flex flex-col h-full min-h-0 bg-card border-r border-border overflow-hidden ${activeLeadId ? 'hidden md:flex' : 'flex'}`} >
         <div className="p-6 border-b border-border pb-4">
-          <h2 className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2 font-bold tracking-tight">
-              <span className="material-symbols-sharp text-primary">smart_toy</span>
+          <h2 className="flex items-center justify-between mb-3 text-sm">
+            <div className="flex items-center gap-2 font-semibold tracking-tight">
+              <span className="material-symbols-sharp text-primary text-[1.1rem]">smart_toy</span>
               DM Agent
             </div>
           </h2>
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
-              <span className="material-symbols-sharp absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-[1.2rem]">search</span>
+              <span className="material-symbols-sharp absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-[1.1rem]">search</span>
               <Input 
                 type="text" 
                 placeholder="Search Leads..." 
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 bg-background"
+                className="pl-9 h-8 text-xs bg-background"
               />
             </div>
-            <Button variant="default" size="icon" onClick={() => setShowAddLead(true)} disabled={isLoading} title="Add Lead">
-              <span className="material-symbols-sharp text-[1.2rem]">add</span>
+            <Button variant="default" size="icon" className="h-8 w-8" onClick={() => setShowAddLead(true)} disabled={isLoading} title="Add Lead">
+              <span className="material-symbols-sharp text-[1.1rem]">add</span>
             </Button>
           </div>
         </div>
@@ -739,7 +739,7 @@ export default function DMApp() {
                 return (
                 <li 
                   key={lead.id} 
-                  className={`flex items-center gap-3 p-4 border-b border-border cursor-pointer transition-colors hover:bg-surface-hover group ${activeLeadId === lead.id ? "bg-surface-hover" : ""}`}
+                  className={`flex items-center gap-3 px-4 py-2 border-b border-border cursor-pointer transition-colors hover:bg-surface-hover group ${activeLeadId === lead.id ? "bg-surface-hover" : ""}`}
                   onClick={() => {
                     if (activeLeadId !== lead.id) {
                       setActiveLeadId(lead.id);
@@ -747,15 +747,15 @@ export default function DMApp() {
                     }
                   }}
                 >
-                  <span className="material-symbols-sharp" style={{ color: 'var(--muted)', fontSize: '2rem' }}>
+                  <span className="material-symbols-sharp" style={{ color: 'var(--muted)', fontSize: '1.2rem' }}>
                     account_circle
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <strong style={{ display: 'block', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                    <span className="block font-medium text-sm truncate">
                       {lead.name}
-                    </strong>
+                    </span>
                     {lead.fb_link && (
-                      <div style={{ fontSize: '0.75rem', color: 'var(--primary)', marginTop: '2px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                      <div className="text-xs text-primary mt-0.5 truncate">
                         {lead.fb_link}
                       </div>
                     )}
@@ -800,15 +800,15 @@ export default function DMApp() {
         </ul>
 
         {/* Client Switcher Bottom Menu */}
-        <div className="p-4 border-t border-border bg-card">
+        <div className="p-2 pb-6 border-t border-border bg-card shrink-0">
           <DropdownMenu>
-            <DropdownMenuTrigger className="w-full flex items-center justify-between gap-2 px-3 py-3 rounded-lg border border-border bg-card hover:bg-secondary text-card-foreground transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <div className="flex items-center gap-3 overflow-hidden text-left">
-                <div className="flex items-center justify-center w-8 h-8 rounded bg-primary/20 text-primary shrink-0">
-                  <span className="material-symbols-sharp text-[1.2rem]">apartment</span>
+            <DropdownMenuTrigger className="w-full flex items-center justify-between gap-2 px-2 py-2 rounded-md border border-border bg-card hover:bg-secondary text-card-foreground transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <div className="flex items-center gap-2 overflow-hidden text-left">
+                <div className="flex items-center justify-center w-6 h-6 rounded bg-primary/20 text-primary shrink-0">
+                  <span className="material-symbols-sharp text-[1rem]">apartment</span>
                 </div>
                 <div className="flex flex-col min-w-0">
-                  <span className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Active Client</span>
+                  <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Active Client</span>
                   <span className="font-medium truncate text-sm">
                     {clients.find(c => c.id === activeClientId)?.name || 'Loading...'}
                   </span>
@@ -892,7 +892,7 @@ export default function DMApp() {
       </aside>
 
       {/* Main Workspace Area (Chat Interface) */}
-      <main className={`flex flex-col h-screen overflow-hidden bg-background ${!activeLeadId ? 'hidden md:flex' : 'flex w-full'}`}>
+      <main className={`flex flex-col h-full min-h-0 overflow-hidden bg-background ${!activeLeadId ? 'hidden md:flex' : 'flex w-full'}`}>
         {leadDetails ? (
           <>
             {/* Header */}
