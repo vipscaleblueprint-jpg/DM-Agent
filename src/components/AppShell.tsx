@@ -39,7 +39,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex flex-1 overflow-hidden">
         {/* VIP Scale sidebar — controlled by header toggle */}
         <div className={`shrink-0 transition-all duration-300 ease-in-out overflow-hidden ${sidebarOpen ? 'w-auto' : 'w-0'}`}>
-          <Sidebar forceOpen={sidebarOpen} />
+          <Sidebar collapsed={false} />
         </div>
 
         {/* DM Agent content */}
