@@ -44,7 +44,7 @@ export async function GET(request: NextRequest) {
     .setExpirationTime("7d")
     .sign(getSessionSecret());
 
-  const response = NextResponse.redirect(new URL("/", request.url));
+  const response = NextResponse.redirect("https://dm-agent.vipscaleph.com/");
   response.cookies.set("dm_agent_session", sessionToken, {
     httpOnly: true,
     secure: true,
