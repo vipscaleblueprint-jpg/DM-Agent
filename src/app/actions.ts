@@ -8,10 +8,8 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 export async function getLeads(clientId: string, productId?: string) {
   let whereClause: any = { client_id: clientId };
-  if (productId) {
-    // Include leads created before product tagging (no product) so they don't disappear
-    whereClause.OR = [{ product_id: productId }, { product_id: null }];
-  }
+  // Global view (no product) only shows leads without a product; a product view only shows that product's leads
+  whereClause.product_id = productId || null;
   const leads = await prisma.lead.findMany({
     where: whereClause,
     orderBy: { createdAt: 'desc' },
@@ -217,26 +215,16 @@ export async function saveClientContext(clientId: string | null, contextText: st
 }
 
 // Builds everything sent to the model, so drafting and the "View Active System Prompt" debug view stay identical.
-async function buildDraftContext(leadId: string, clientId: string, simulatedTime?: string, fallbackProductId?: string | null, persist = true) {
+async function buildDraftContext(leadId: string, clientId: string, simulatedTime?: string) {
   // 2. Retrieve history and state
   const lead = await prisma.lead.findUnique({ 
     where: { id: leadId },
     include: { Product: true }
   });
   const leadState = await prisma.leadState.findUnique({ where: { lead_id: leadId } });
-  const client = await prisma.client.findUnique({ where: { id: clientId }, include: { Product: true } });
+  const client = await prisma.client.findUnique({ where: { id: clientId } });
 
-  // Leads created before products were tracked have no product. Adopt the one selected in the UI,
-  // or the client's only product, so the product's PVPS is still injected.
-  let product = lead?.Product || null;
-  if (lead && !product) {
-    const adopted = (fallbackProductId && client?.Product.find(p => p.id === fallbackProductId))
-      || (client?.Product.length === 1 ? client.Product[0] : null);
-    if (adopted) {
-      product = adopted;
-      if (persist) await prisma.lead.update({ where: { id: leadId }, data: { product_id: adopted.id } });
-    }
-  }
+  const product = lead?.Product || null;
   const conversations = await prisma.conversation.findMany({
     where: { lead_id: leadId },
     orderBy: { createdAt: 'asc' },
@@ -270,6 +258,11 @@ ${leadState?.leadSummary || 'No long term memory recorded yet.'}
 Assessment Data Captured So Far:
 ${JSON.stringify(leadState?.assessmentData || {}, null, 2)}
 
+${client?.vps || client?.persona ? `CLIENT PROFILE (The business owner you are speaking for):
+Client Name: ${client.name}
+Value Proposition (VPS): ${client.vps || 'None provided'}
+Target Persona: ${client.persona || 'None provided'}
+` : ''}
 ${product ? `PRODUCT CONTEXT (Keep this specific product in mind while responding):\nProduct Name: ${product.product_name}\nValue Proposition (VPS): ${product.vps || 'None provided'}\nTarget Persona: ${product.persona || 'None provided'}\n` : ''}
 ${client?.context?.trim() ? `GLOBAL CLIENT CONTEXT (Knowledge base and learned rules for this client. Follow it.):\n${client.context.trim()}\n` : ''}
 
@@ -279,8 +272,8 @@ Output JSON according to the schema.
   return { lead, leadState, client, product, stage, stageName, chatHistoryStr, systemPrompt };
 }
 
-export async function getFullSystemPrompt(leadId: string, clientId: string, fallbackProductId?: string | null) {
-  const ctx = await buildDraftContext(leadId, clientId, undefined, fallbackProductId, false);
+export async function getFullSystemPrompt(leadId: string, clientId: string) {
+  const ctx = await buildDraftContext(leadId, clientId);
   const assetUrls = ctx.client?.context ? Array.from(ctx.client.context.matchAll(/https:\/\/[^\s]+/g)).map(m => m[0]) : [];
   return {
     systemPrompt: ctx.systemPrompt.trim(),
@@ -289,12 +282,12 @@ export async function getFullSystemPrompt(leadId: string, clientId: string, fall
   };
 }
 
-export async function generateDraftResponse(leadId: string, clientId: string, simulatedTime?: string, fallbackProductId?: string | null) {
+export async function generateDraftResponse(leadId: string, clientId: string, simulatedTime?: string) {
   if (!process.env.API_KEY) {
     return { success: false, error: 'API_KEY is not set in .env' };
   }
 
-  const { lead, leadState, client, stage, chatHistoryStr, systemPrompt } = await buildDraftContext(leadId, clientId, simulatedTime, fallbackProductId);
+  const { lead, leadState, client, stage, chatHistoryStr, systemPrompt } = await buildDraftContext(leadId, clientId, simulatedTime);
 
   const assetUrls = client?.context ? Array.from(client.context.matchAll(/https:\/\/[^\s]+/g)).map(m => m[0]) : [];
   const promptParts: any[] = [{ type: 'text', text: `Chat History:\n${chatHistoryStr}` }];
@@ -811,6 +804,8 @@ export async function syncVipscaleClients() {
         await prisma.client.update({
           where: { id: existingClient.id },
           data: {
+            vps: item.vps || null,
+            persona: item.persona || null,
             updatedAt: new Date()
           }
         });
@@ -819,6 +814,8 @@ export async function syncVipscaleClients() {
           data: {
             id: `client_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             name: clientName,
+            vps: item.vps || null,
+            persona: item.persona || null,
             updatedAt: new Date()
           }
         });

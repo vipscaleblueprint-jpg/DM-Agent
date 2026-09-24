@@ -590,7 +590,7 @@ export default function DMApp() {
   const handleShowDebugPrompt = async () => {
     if (!leadDetails?.LeadState?.stage) return;
     try {
-      const full = await getFullSystemPrompt(leadDetails.id, leadDetails.client_id, activeProductId);
+      const full = await getFullSystemPrompt(leadDetails.id, leadDetails.client_id);
       const attachments = full.attachments.length > 0 ? full.attachments.join('\n') : '(none)';
       setDebugPromptText(
         `===== SYSTEM PROMPT =====\n${full.systemPrompt}\n\n` +
@@ -616,7 +616,7 @@ export default function DMApp() {
     await fetchLeadDetails(activeLeadId as string);
     
     const simTimeIso = simulatedTime ? new Date(simulatedTime).toISOString() : undefined;
-    const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso, activeProductId);
+    const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso);
     if (!res.success) {
       toast.error(`Draft generation failed: ${res.error}`);
     }
@@ -633,7 +633,7 @@ export default function DMApp() {
     await deleteMessage(messageId);
     
     const simTimeIso = simulatedTime ? new Date(simulatedTime).toISOString() : undefined;
-    const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso, activeProductId);
+    const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso);
     
     if (res.success) {
       await fetchLeadDetails(activeLeadId as string);
@@ -653,7 +653,7 @@ export default function DMApp() {
     
     setIsLoading(true);
     const simTimeIso = simulatedTime ? new Date(simulatedTime).toISOString() : new Date().toISOString();
-    const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso, activeProductId);
+    const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso);
     
     if (res.success) {
       setInputText('');
@@ -693,7 +693,7 @@ export default function DMApp() {
       }
 
       const simTimeIso = simulatedTime ? new Date(simulatedTime).toISOString() : undefined;
-      const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso, activeProductId);
+      const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso);
       if (!res.success) {
         toast.error(`Draft generation failed: ${res.error}`);
       }
@@ -1656,6 +1656,32 @@ export default function DMApp() {
                   </ul>
                 </div>
               )}
+
+              {(() => {
+                const currentClient = clients.find(c => c.id === activeClientId);
+                if (!currentClient) return null;
+                return (
+                  <div className="mb-6 p-4 rounded-md border border-primary/20 bg-primary/5">
+                    <h4 className="text-sm font-semibold mb-3 text-primary uppercase tracking-wider flex items-center gap-2">
+                      <span className="material-symbols-sharp text-[1.1rem]">apartment</span>
+                      Client PVPs
+                    </h4>
+                    <div className="text-sm space-y-3 text-foreground">
+                      <div>
+                        <strong className="text-muted-foreground block text-xs mb-1">Value Proposition (VPS)</strong>
+                        <p className="whitespace-pre-wrap text-[13px]">{currentClient.vps || 'None provided. Use "Sync Clients from Tools" to pull it in.'}</p>
+                      </div>
+                      <div>
+                        <strong className="text-muted-foreground block text-xs mb-1">Target Persona</strong>
+                        <p className="whitespace-pre-wrap text-[13px]">{currentClient.persona || 'None provided'}</p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-3 italic border-t border-primary/10 pt-2">
+                      This information is automatically injected into the AI's prompt for all of this client's leads, global or product.
+                    </p>
+                  </div>
+                );
+              })()}
 
               {(() => {
                 const currentClient = clients.find(c => c.id === activeClientId);
