@@ -9,7 +9,8 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 export async function getLeads(clientId: string, productId?: string) {
   let whereClause: any = { client_id: clientId };
   if (productId) {
-    whereClause.product_id = productId;
+    // Include leads created before product tagging (no product) so they don't disappear
+    whereClause.OR = [{ product_id: productId }, { product_id: null }];
   }
   const leads = await prisma.lead.findMany({
     where: whereClause,
@@ -29,6 +30,22 @@ export async function getLeads(clientId: string, productId?: string) {
   ));
 }
 
+// Legacy stage markers were stored as fake messages. Fold them into a per-message stage.
+function withEffectiveStages<T extends { content: string; stage: number | null }>(conversations: T[]) {
+  let current = 1;
+  const result: (T & { stage: number })[] = [];
+  for (const c of conversations) {
+    const marker = c.content.match(/^\[\[STAGE_MARKER:(\d+)\]\]/);
+    if (marker) {
+      current = parseInt(marker[1], 10);
+      continue;
+    }
+    if (c.stage != null) current = c.stage;
+    result.push({ ...c, stage: c.stage ?? current });
+  }
+  return result;
+}
+
 export async function getLeadDetails(leadId: string) {
   const lead = await prisma.lead.findUnique({
     where: { id: leadId },
@@ -40,6 +57,10 @@ export async function getLeadDetails(leadId: string) {
       }
     }
   });
+
+  if (lead) {
+    lead.Conversation = withEffectiveStages(lead.Conversation);
+  }
 
   // Serialize BigInt safely
   return JSON.parse(JSON.stringify(lead, (key, value) =>
@@ -72,11 +93,13 @@ const google = createGoogleGenerativeAI({
 
 export async function sendLeadMessage(leadId: string, text: string) {
   if (!text.trim()) return;
+  const leadState = await prisma.leadState.findUnique({ where: { lead_id: leadId } });
   await prisma.conversation.create({
     data: {
       lead_id: leadId,
       role: 'user',
       content: text,
+      stage: leadState?.stage || 1,
     }
   });
   revalidatePath('/');
@@ -314,6 +337,7 @@ Output JSON according to the schema.
         lead_id: leadId,
         role: 'assistant',
         content: object.drafted_response,
+        stage,
       }
     });
 
@@ -402,7 +426,7 @@ export async function uploadFileToR2(formData: FormData) {
   }
 }
 
-export async function addLead(name: string, fbLink?: string, clientId?: string) {
+export async function addLead(name: string, fbLink?: string, clientId?: string, productId?: string | null) {
   const leadId = `lead_${Date.now()}`;
   
   let targetClientId = clientId;
@@ -426,6 +450,7 @@ export async function addLead(name: string, fbLink?: string, clientId?: string) 
       name,
       fb_link: fbLink || null,
       client_id: targetClientId,
+      product_id: productId || null,
       updatedAt: new Date(),
       LeadState: {
         create: {
@@ -512,8 +537,18 @@ export async function editStructuredLeadMemory(leadId: string, stage: number, co
   revalidatePath('/');
 }
 
-export async function insertConversationMessage(leadId: string, role: 'user' | 'assistant', content: string, insertAfterMsgId?: string | null) {
+export async function insertConversationMessage(leadId: string, role: 'user' | 'assistant', content: string, insertAfterMsgId?: string | null, stageOverride?: number) {
   let createdAt = new Date();
+  const existing = withEffectiveStages(await prisma.conversation.findMany({
+    where: { lead_id: leadId },
+    orderBy: { createdAt: 'asc' }
+  }));
+  const leadState = await prisma.leadState.findUnique({ where: { lead_id: leadId } });
+  // New messages inherit the stage of the message they follow (or the first message / current stage)
+  const anchor = insertAfterMsgId
+    ? existing.find(c => c.id.toString() === insertAfterMsgId)
+    : existing[0];
+  const stage = stageOverride ?? anchor?.stage ?? leadState?.stage ?? 1;
 
   if (insertAfterMsgId) {
     const afterMsg = await prisma.conversation.findUnique({ where: { id: BigInt(insertAfterMsgId) } });
@@ -546,10 +581,31 @@ export async function insertConversationMessage(leadId: string, role: 'user' | '
       lead_id: leadId,
       role,
       content,
+      stage,
       createdAt
     }
   });
   revalidatePath('/');
+}
+
+// Marks a message (or the start of the chat when msgId is null) and every following
+// message up to the next stage change as belonging to `stage`.
+export async function setMessageStageFrom(leadId: string, msgId: string | null, stage: number) {
+  const conversations = withEffectiveStages(await prisma.conversation.findMany({
+    where: { lead_id: leadId },
+    orderBy: { createdAt: 'asc' }
+  }));
+  const start = msgId ? conversations.findIndex(c => c.id.toString() === msgId) : 0;
+  if (start < 0 || conversations.length === 0) return { success: false };
+
+  const originalStage = conversations[start].stage;
+  const ids: bigint[] = [];
+  for (let i = start; i < conversations.length && conversations[i].stage === originalStage; i++) {
+    ids.push(conversations[i].id);
+  }
+  await prisma.conversation.updateMany({ where: { id: { in: ids } }, data: { stage } });
+  revalidatePath('/');
+  return { success: true };
 }
 
 export async function learnFromCorrection(clientId: string, originalContent: string, newContent: string) {

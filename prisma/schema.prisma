@@ -48,6 +48,7 @@ model Conversation {
   lead_id   String
   role      MessageRole
   content   String
+  stage     Int?
   createdAt DateTime    @default(now())
   Lead      Lead        @relation(fields: [lead_id], references: [id])
 }

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
-import { getLeads, editLeadMemory, editStructuredLeadMemory, insertConversationMessage, getLeadDetails, generateDraftResponse, addLead, getPresignedUrl, sendLeadMessage, saveClientContext, uploadFileToR2, getGlobalClient, getPromptForStage, editLead, removeLead, editConversationMessage, learnFromCorrection, deleteMessage, getClients, addClient, getClientStage, editClient, getClientStages, saveClientStages, syncVipscaleClients } from './actions';
+import { getLeads, editLeadMemory, editStructuredLeadMemory, insertConversationMessage, setMessageStageFrom, getLeadDetails, generateDraftResponse, addLead, getPresignedUrl, sendLeadMessage, saveClientContext, uploadFileToR2, getGlobalClient, getPromptForStage, editLead, removeLead, editConversationMessage, learnFromCorrection, deleteMessage, getClients, addClient, getClientStage, editClient, getClientStages, saveClientStages, syncVipscaleClients } from './actions';
 import { Button } from "@/components/ui/button";
 import Loader from "@/components/ui/loader";
 import { Input } from "@/components/ui/input";
@@ -200,6 +200,10 @@ export default function DMApp() {
   const [insertTargetMsgId, setInsertTargetMsgId] = useState<string | null | undefined>(undefined);
   const [insertRole, setInsertRole] = useState<'user' | 'assistant' | 'stage'>('user');
   const [insertContent, setInsertContent] = useState('');
+  const [insertStage, setInsertStage] = useState(2);
+  const [insertMsgStage, setInsertMsgStage] = useState<number | 'auto'>('auto');
+  const [funnelStages, setFunnelStages] = useState<any[]>([]);
+  const [activeChatStage, setActiveChatStage] = useState<number | 'all'>('all');
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
   const [editingMsgContent, setEditingMsgContent] = useState('');
   
@@ -320,7 +324,13 @@ export default function DMApp() {
   }, [activeClientId, activeProductId]);
 
   useEffect(() => {
+    if (!activeClientId) return;
+    getClientStages(activeClientId).then(setFunnelStages).catch(err => console.error(err));
+  }, [activeClientId]);
+
+  useEffect(() => {
     if (activeLeadId) {
+      setActiveChatStage('all');
       fetchLeadDetails(activeLeadId);
       setInputText('');
     }
@@ -355,7 +365,7 @@ export default function DMApp() {
     if (!newLeadName.trim() || !activeClientId) return;
     
     setIsLoading(true);
-    const newId = await addLead(newLeadName, newLeadFbLink, activeClientId);
+    const newId = await addLead(newLeadName, newLeadFbLink, activeClientId, activeProductId);
     await fetchLeads(activeClientId);
     setActiveLeadId(newId);
     setNewLeadName('');
@@ -527,6 +537,7 @@ export default function DMApp() {
       });
       const { saveClientStages } = await import('./actions');
       await saveClientStages(activeClientId!, parsedStages);
+      setFunnelStages(await getClientStages(activeClientId!));
       toast.success('Funnel config saved.');
     }
     setIsSavingContext(false);
@@ -686,6 +697,95 @@ export default function DMApp() {
       (lead.fb_link || '').toLowerCase().includes(lowerQuery)
     );
   }, [leads, searchQuery]);
+
+  const stageLabel = (num: number) => {
+    const name = funnelStages.find((st: any) => st.stageOrder === num)?.stageName;
+    return name ? `Stage ${num}: ${name}` : `Stage ${num}`;
+  };
+  // Stages configured for this client; fall back to 1-6 if none are set up yet
+  const stageOptions = funnelStages.length > 0 ? funnelStages.map((st: any) => st.stageOrder as number) : [1, 2, 3, 4, 5, 6];
+
+  const chatStages = useMemo(() => {
+    const nums = new Set<number>();
+    (leadDetails?.Conversation || []).forEach((m: any) => nums.add(m.stage ?? 1));
+    if (leadDetails?.LeadState?.stage) nums.add(leadDetails.LeadState.stage);
+    return Array.from(nums).sort((a, b) => a - b);
+  }, [leadDetails]);
+
+  const visibleMessages = useMemo(() => {
+    const all: any[] = leadDetails?.Conversation || [];
+    return activeChatStage === 'all' ? all : all.filter(m => m.stage === activeChatStage);
+  }, [leadDetails, activeChatStage]);
+
+  const refreshTimeline = async () => {
+    const data = await getLeadDetails(editMemoryLeadId);
+    setEditMemoryConversations(data?.Conversation || []);
+    if (activeLeadId === editMemoryLeadId) {
+      setLeadDetails(JSON.parse(JSON.stringify(await getLeadDetails(activeLeadId))));
+    }
+  };
+
+  const renderInsertForm = (afterMsgId: string | null) => (
+    <div className="bg-secondary/40 p-3 rounded-md border border-border flex flex-col gap-2 shadow-inner">
+      <div className="flex gap-2">
+        <Button variant={insertRole === 'user' ? 'default' : 'outline'} size="sm" onClick={() => setInsertRole('user')} className="h-7 text-xs">Lead</Button>
+        <Button variant={insertRole === 'assistant' ? 'default' : 'outline'} size="sm" onClick={() => setInsertRole('assistant')} className="h-7 text-xs">AI Draft</Button>
+        {editMemoryConversations.length > 0 && (
+          <Button variant={insertRole === 'stage' ? 'default' : 'outline'} size="sm" onClick={() => setInsertRole('stage')} className="h-7 text-xs">Stage Marker</Button>
+        )}
+      </div>
+      {insertRole === 'stage' && editMemoryConversations.length > 0 ? (
+        <div className="flex flex-col gap-1.5">
+          <select
+            value={insertStage}
+            onChange={e => setInsertStage(parseInt(e.target.value, 10))}
+            className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            {stageOptions.map(num => (
+              <option key={num} value={num}>{stageLabel(num)}</option>
+            ))}
+          </select>
+          <span className="text-xs text-muted-foreground">The message right after this point, and everything following it up to the next stage change, is moved to this stage.</span>
+        </div>
+      ) : (
+        <>
+          <Textarea value={insertContent} onChange={e => setInsertContent(e.target.value)} placeholder="Type new message..." className="text-sm min-h-[60px]" />
+          <select
+            value={insertMsgStage}
+            onChange={e => setInsertMsgStage(e.target.value === 'auto' ? 'auto' : parseInt(e.target.value, 10))}
+            className="flex h-9 w-full items-center rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            <option value="auto">Stage: same as surrounding messages</option>
+            {stageOptions.map(num => (
+              <option key={num} value={num}>{stageLabel(num)}</option>
+            ))}
+          </select>
+        </>
+      )}
+      <div className="flex justify-end gap-2 mt-1">
+        <Button variant="outline" size="sm" onClick={() => { setInsertTargetMsgId(undefined); setInsertContent(''); }} className="h-7 text-xs">Cancel</Button>
+        <Button size="sm" className="h-7 text-xs" onClick={async () => {
+          if (insertRole === 'stage' && editMemoryConversations.length > 0) {
+            const idx = afterMsgId === null ? 0 : editMemoryConversations.findIndex(m => m.id.toString() === afterMsgId) + 1;
+            const next = editMemoryConversations[idx];
+            if (!next) {
+              toast.error('There is no message after this point to start the stage on.');
+              return;
+            }
+            await setMessageStageFrom(editMemoryLeadId, next.id.toString(), insertStage);
+            toast.success(`Stage ${insertStage} marker applied`);
+          } else {
+            if (!insertContent.trim()) return;
+            await insertConversationMessage(editMemoryLeadId, insertRole === 'stage' ? 'user' : insertRole, insertContent, afterMsgId, insertMsgStage === 'auto' ? undefined : insertMsgStage);
+            toast.success('Message inserted');
+          }
+          setInsertTargetMsgId(undefined);
+          setInsertContent('');
+          await refreshTimeline();
+        }}>{insertRole === 'stage' ? 'Apply' : 'Insert'}</Button>
+      </div>
+    </div>
+  );
 
   const filteredClients = useMemo(() => {
     if (!clientSearchQuery) return clients;
@@ -934,6 +1034,22 @@ export default function DMApp() {
               </Sheet>
             </header>
             
+            {/* Stage Tabs */}
+            {chatStages.length > 1 && (
+              <div className="shrink-0 flex items-center gap-2 px-6 py-2 border-b border-border bg-card overflow-x-auto [scrollbar-width:none]">
+                {(['all', ...chatStages] as (number | 'all')[]).map(tab => (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveChatStage(tab)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap border transition-colors ${activeChatStage === tab ? 'bg-primary text-primary-foreground border-primary' : 'bg-background text-muted-foreground border-border hover:text-foreground'}`}
+                  >
+                    {tab === 'all' ? 'All' : stageLabel(tab)}
+                    {tab === leadDetails?.LeadState?.stage ? ' •' : ''}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Scrollable Message History */}
             <div className="flex-1 overflow-y-auto min-h-0 p-6 flex flex-col gap-6 bg-background">
               {(!leadDetails.Conversation || leadDetails.Conversation.length === 0) ? (
@@ -942,7 +1058,7 @@ export default function DMApp() {
                   <p>No messages yet. Send a message to start the funnel.</p>
                 </div>
               ) : (
-                leadDetails.Conversation.map((msg: any) => (
+                visibleMessages.map((msg: any) => (
                   <div key={msg.id.toString()} className={`flex flex-col max-w-[90%] md:max-w-[75%] ${msg.role === 'user' ? 'self-end items-end' : 'self-start items-start'}`}>
                     
                     {/* Header */}
@@ -1194,7 +1310,10 @@ export default function DMApp() {
             {isMemoryLoading ? (
               <div className="text-sm text-muted-foreground animate-pulse py-8 text-center">Loading conversation history...</div>
             ) : editMemoryConversations.length === 0 ? (
-              <div className="text-sm text-muted-foreground py-8 text-center">No messages in this conversation yet.</div>
+              <div className="flex flex-col gap-3 py-4">
+                <div className="text-sm text-muted-foreground text-center">No messages yet. Add earlier conversation history below.</div>
+                {renderInsertForm(null)}
+              </div>
             ) : (
               <div className="space-y-2 max-h-[65vh] overflow-y-auto pr-2 custom-scrollbar">
                 {/* Insert at top */}
@@ -1204,76 +1323,20 @@ export default function DMApp() {
                   </Button>
                 </div>
 
-                {insertTargetMsgId === null && (
-                  <div className="bg-secondary/40 p-3 rounded-md border border-border flex flex-col gap-2 shadow-inner">
-                    <div className="flex gap-2">
-                      <Button variant={insertRole === 'user' ? 'default' : 'outline'} size="sm" onClick={() => setInsertRole('user')} className="h-7 text-xs">Lead</Button>
-                      <Button variant={insertRole === 'assistant' ? 'default' : 'outline'} size="sm" onClick={() => setInsertRole('assistant')} className="h-7 text-xs">AI Draft</Button>
-                      <Button variant={insertRole === 'stage' ? 'default' : 'outline'} size="sm" onClick={() => setInsertRole('stage')} className="h-7 text-xs">Stage Marker</Button>
-                    </div>
-                    {insertRole === 'stage' ? (
-                      <select 
-                        value={insertContent} 
-                        onChange={e => setInsertContent(e.target.value)}
-                        className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                      >
-                        <option value="">-- Select Stage --</option>
-                        {[1, 2, 3, 4, 5, 6].map(num => (
-                          <option key={num} value={`[[STAGE_MARKER:${num}]]`}>Stage {num}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <Textarea value={insertContent} onChange={e => setInsertContent(e.target.value)} placeholder="Type new message..." className="text-sm min-h-[60px]" />
-                    )}
-                    <div className="flex justify-end gap-2 mt-1">
-                      <Button variant="outline" size="sm" onClick={() => { setInsertTargetMsgId(undefined); setInsertContent(''); }} className="h-7 text-xs">Cancel</Button>
-                      <Button size="sm" className="h-7 text-xs" onClick={async () => {
-                        if (!insertContent.trim()) return;
-                        await insertConversationMessage(editMemoryLeadId, insertRole === 'stage' ? 'assistant' : insertRole, insertContent, null);
-                        setInsertTargetMsgId(undefined);
-                        setInsertContent('');
-                        toast.success('Message inserted');
-                        const data = await getLeadDetails(editMemoryLeadId);
-                        setEditMemoryConversations(data?.Conversation || []);
-                        if (activeLeadId === editMemoryLeadId) {
-                          const activeData = await getLeadDetails(activeLeadId);
-                          setLeadDetails(JSON.parse(JSON.stringify(activeData)));
-                        }
-                      }}>Insert</Button>
-                    </div>
-                  </div>
-                )}
+                {insertTargetMsgId === null && renderInsertForm(null)}
 
-                  {editMemoryConversations.map((msg: any) => (
+                  {editMemoryConversations.map((msg: any, idx: number) => (
                     <React.Fragment key={msg.id.toString()}>
+                      {(idx === 0 || editMemoryConversations[idx - 1].stage !== msg.stage) && (
+                        <div className="flex items-center gap-4 py-4">
+                          <div className="flex-1 h-[1px] bg-border"></div>
+                          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground bg-background px-3 border border-border rounded-full shadow-sm">
+                            {stageLabel(msg.stage)} Started Here
+                          </span>
+                          <div className="flex-1 h-[1px] bg-border"></div>
+                        </div>
+                      )}
                       {(() => {
-                        if (msg.content.startsWith('[[STAGE_MARKER:')) {
-                          const stageNum = msg.content.match(/\d+/)?.[0] || '?';
-                          return (
-                            <div className="flex items-center gap-4 py-4 group relative">
-                              <div className="flex-1 h-[1px] bg-border"></div>
-                              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground bg-background px-3 border border-border rounded-full shadow-sm">
-                                Stage {stageNum} Started Here
-                              </span>
-                              <div className="flex-1 h-[1px] bg-border"></div>
-                              
-                              <Button 
-                                variant="ghost" 
-                                size="icon" 
-                                className="absolute right-0 opacity-0 group-hover:opacity-100 h-6 w-6 text-destructive bg-background shadow-sm border border-border rounded-full"
-                                onClick={async () => {
-                                  if (!confirm('Remove this stage marker?')) return;
-                                  await editConversationMessage(msg.id.toString(), '__DELETE__');
-                                  toast.success('Marker removed');
-                                  const data = await getLeadDetails(editMemoryLeadId);
-                                  setEditMemoryConversations(data?.Conversation || []);
-                                }}
-                              >
-                                <span className="material-symbols-sharp text-[0.9rem]">close</span>
-                              </Button>
-                            </div>
-                          );
-                        }
                         
                         return (
                           <div
@@ -1362,45 +1425,7 @@ export default function DMApp() {
                       </Button>
                     </div>
 
-                    {insertTargetMsgId === msg.id.toString() && (
-                      <div className="bg-secondary/40 p-3 rounded-md border border-border flex flex-col gap-2 shadow-inner">
-                        <div className="flex gap-2">
-                          <Button variant={insertRole === 'user' ? 'default' : 'outline'} size="sm" onClick={() => setInsertRole('user')} className="h-7 text-xs">Lead</Button>
-                          <Button variant={insertRole === 'assistant' ? 'default' : 'outline'} size="sm" onClick={() => setInsertRole('assistant')} className="h-7 text-xs">AI Draft</Button>
-                          <Button variant={insertRole === 'stage' ? 'default' : 'outline'} size="sm" onClick={() => setInsertRole('stage')} className="h-7 text-xs">Stage Marker</Button>
-                        </div>
-                        {insertRole === 'stage' ? (
-                          <select 
-                            value={insertContent} 
-                            onChange={e => setInsertContent(e.target.value)}
-                            className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                          >
-                            <option value="">-- Select Stage --</option>
-                            {[1, 2, 3, 4, 5, 6].map(num => (
-                              <option key={num} value={`[[STAGE_MARKER:${num}]]`}>Stage {num}</option>
-                            ))}
-                          </select>
-                        ) : (
-                          <Textarea value={insertContent} onChange={e => setInsertContent(e.target.value)} placeholder="Type new message..." className="text-sm min-h-[60px]" />
-                        )}
-                        <div className="flex justify-end gap-2 mt-1">
-                          <Button variant="outline" size="sm" onClick={() => { setInsertTargetMsgId(undefined); setInsertContent(''); }} className="h-7 text-xs">Cancel</Button>
-                          <Button size="sm" className="h-7 text-xs" onClick={async () => {
-                            if (!insertContent.trim()) return;
-                            await insertConversationMessage(editMemoryLeadId, insertRole === 'stage' ? 'assistant' : insertRole, insertContent, msg.id.toString());
-                            setInsertTargetMsgId(undefined);
-                            setInsertContent('');
-                            toast.success('Message inserted');
-                            const data = await getLeadDetails(editMemoryLeadId);
-                            setEditMemoryConversations(data?.Conversation || []);
-                            if (activeLeadId === editMemoryLeadId) {
-                              const activeData = await getLeadDetails(activeLeadId);
-                              setLeadDetails(JSON.parse(JSON.stringify(activeData)));
-                            }
-                          }}>Insert</Button>
-                        </div>
-                      </div>
-                    )}
+                    {insertTargetMsgId === msg.id.toString() && renderInsertForm(msg.id.toString())}
                   </React.Fragment>
                 ))}
               </div>
