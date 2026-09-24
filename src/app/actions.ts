@@ -216,18 +216,27 @@ export async function saveClientContext(clientId: string | null, contextText: st
   revalidatePath('/');
 }
 
-export async function generateDraftResponse(leadId: string, clientId: string, simulatedTime?: string) {
-  if (!process.env.API_KEY) {
-    return { success: false, error: 'API_KEY is not set in .env' };
-  }
-
+// Builds everything sent to the model, so drafting and the "View Active System Prompt" debug view stay identical.
+async function buildDraftContext(leadId: string, clientId: string, simulatedTime?: string, fallbackProductId?: string | null, persist = true) {
   // 2. Retrieve history and state
   const lead = await prisma.lead.findUnique({ 
     where: { id: leadId },
     include: { Product: true }
   });
   const leadState = await prisma.leadState.findUnique({ where: { lead_id: leadId } });
-  const client = await prisma.client.findUnique({ where: { id: clientId } });
+  const client = await prisma.client.findUnique({ where: { id: clientId }, include: { Product: true } });
+
+  // Leads created before products were tracked have no product. Adopt the one selected in the UI,
+  // or the client's only product, so the product's PVPS is still injected.
+  let product = lead?.Product || null;
+  if (lead && !product) {
+    const adopted = (fallbackProductId && client?.Product.find(p => p.id === fallbackProductId))
+      || (client?.Product.length === 1 ? client.Product[0] : null);
+    if (adopted) {
+      product = adopted;
+      if (persist) await prisma.lead.update({ where: { id: leadId }, data: { product_id: adopted.id } });
+    }
+  }
   const conversations = await prisma.conversation.findMany({
     where: { lead_id: leadId },
     orderBy: { createdAt: 'asc' },
@@ -261,10 +270,31 @@ ${leadState?.leadSummary || 'No long term memory recorded yet.'}
 Assessment Data Captured So Far:
 ${JSON.stringify(leadState?.assessmentData || {}, null, 2)}
 
-${lead?.Product ? `PRODUCT CONTEXT (Keep this specific product in mind while responding):\nProduct Name: ${lead.Product.product_name}\nValue Proposition (VPS): ${lead.Product.vps || 'None provided'}\nTarget Persona: ${lead.Product.persona || 'None provided'}\n` : ''}
+${product ? `PRODUCT CONTEXT (Keep this specific product in mind while responding):\nProduct Name: ${product.product_name}\nValue Proposition (VPS): ${product.vps || 'None provided'}\nTarget Persona: ${product.persona || 'None provided'}\n` : ''}
+${client?.context?.trim() ? `GLOBAL CLIENT CONTEXT (Knowledge base and learned rules for this client. Follow it.):\n${client.context.trim()}\n` : ''}
 
 Output JSON according to the schema.
 `;
+
+  return { lead, leadState, client, product, stage, stageName, chatHistoryStr, systemPrompt };
+}
+
+export async function getFullSystemPrompt(leadId: string, clientId: string, fallbackProductId?: string | null) {
+  const ctx = await buildDraftContext(leadId, clientId, undefined, fallbackProductId, false);
+  const assetUrls = ctx.client?.context ? Array.from(ctx.client.context.matchAll(/https:\/\/[^\s]+/g)).map(m => m[0]) : [];
+  return {
+    systemPrompt: ctx.systemPrompt.trim(),
+    chatHistory: ctx.chatHistoryStr,
+    attachments: assetUrls,
+  };
+}
+
+export async function generateDraftResponse(leadId: string, clientId: string, simulatedTime?: string, fallbackProductId?: string | null) {
+  if (!process.env.API_KEY) {
+    return { success: false, error: 'API_KEY is not set in .env' };
+  }
+
+  const { lead, leadState, client, stage, chatHistoryStr, systemPrompt } = await buildDraftContext(leadId, clientId, simulatedTime, fallbackProductId);
 
   const assetUrls = client?.context ? Array.from(client.context.matchAll(/https:\/\/[^\s]+/g)).map(m => m[0]) : [];
   const promptParts: any[] = [{ type: 'text', text: `Chat History:\n${chatHistoryStr}` }];

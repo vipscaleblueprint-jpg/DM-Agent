@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
-import { getLeads, editLeadMemory, editStructuredLeadMemory, insertConversationMessage, setMessageStageFrom, getLeadDetails, generateDraftResponse, addLead, getPresignedUrl, sendLeadMessage, saveClientContext, uploadFileToR2, getGlobalClient, getPromptForStage, editLead, removeLead, editConversationMessage, learnFromCorrection, deleteMessage, getClients, addClient, getClientStage, editClient, getClientStages, saveClientStages, syncVipscaleClients } from './actions';
+import { getLeads, editLeadMemory, editStructuredLeadMemory, insertConversationMessage, setMessageStageFrom, getLeadDetails, generateDraftResponse, addLead, getPresignedUrl, sendLeadMessage, saveClientContext, uploadFileToR2, getGlobalClient, getPromptForStage, getFullSystemPrompt, editLead, removeLead, editConversationMessage, learnFromCorrection, deleteMessage, getClients, addClient, getClientStage, editClient, getClientStages, saveClientStages, syncVipscaleClients } from './actions';
 import { Button } from "@/components/ui/button";
 import Loader from "@/components/ui/loader";
 import { Input } from "@/components/ui/input";
@@ -203,6 +203,9 @@ export default function DMApp() {
   const [insertStage, setInsertStage] = useState(2);
   const [insertMsgStage, setInsertMsgStage] = useState<number | 'auto'>('auto');
   const [funnelStages, setFunnelStages] = useState<any[]>([]);
+  const [deleteMsgId, setDeleteMsgId] = useState<string | null>(null);
+  const [isDeletingMsg, setIsDeletingMsg] = useState(false);
+  const [timelineStage, setTimelineStage] = useState<number | 'all'>('all');
   const [activeChatStage, setActiveChatStage] = useState<number | 'all'>('all');
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
   const [editingMsgContent, setEditingMsgContent] = useState('');
@@ -230,6 +233,8 @@ export default function DMApp() {
 
   // Delete Lead Modal State
   const [showDeleteLead, setShowDeleteLead] = useState(false);
+  // Set when removing a lead from the sidebar menu; null means the currently open lead
+  const [deleteLeadTarget, setDeleteLeadTarget] = useState<{ id: string; name: string } | null>(null);
 
   // Global Context Modal State
   const [showContextModal, setShowContextModal] = useState(false);
@@ -432,14 +437,18 @@ export default function DMApp() {
   };
 
   const confirmDeleteLead = async () => {
-    if (!activeLeadId) return;
+    const targetId = deleteLeadTarget?.id ?? activeLeadId;
+    if (!targetId) return;
     setIsLoading(true);
     try {
-      await removeLead(activeLeadId);
-      setActiveLeadId(null);
-      setLeadDetails(null);
+      await removeLead(targetId);
+      if (targetId === activeLeadId) {
+        setActiveLeadId(null);
+        setLeadDetails(null);
+      }
       await fetchLeads();
       setShowDeleteLead(false);
+      setDeleteLeadTarget(null);
     } catch (err) {
       console.error(err);
       toast.error('Failed to delete lead. Check database connection.');
@@ -581,8 +590,13 @@ export default function DMApp() {
   const handleShowDebugPrompt = async () => {
     if (!leadDetails?.LeadState?.stage) return;
     try {
-      const promptText = await getPromptForStage(leadDetails.LeadState.stage, activeClientId!);
-      setDebugPromptText(promptText);
+      const full = await getFullSystemPrompt(leadDetails.id, leadDetails.client_id, activeProductId);
+      const attachments = full.attachments.length > 0 ? full.attachments.join('\n') : '(none)';
+      setDebugPromptText(
+        `===== SYSTEM PROMPT =====\n${full.systemPrompt}\n\n` +
+        `===== ATTACHED FILES (images/PDFs from client context links) =====\n${attachments}\n\n` +
+        `===== MESSAGE SENT TO MODEL =====\nChat History:\n${full.chatHistory || '(no messages yet)'}`
+      );
       setShowDebugModal(true);
     } catch (e) {
       console.error('Failed to load debug prompt', e);
@@ -602,7 +616,7 @@ export default function DMApp() {
     await fetchLeadDetails(activeLeadId as string);
     
     const simTimeIso = simulatedTime ? new Date(simulatedTime).toISOString() : undefined;
-    const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso);
+    const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso, activeProductId);
     if (!res.success) {
       toast.error(`Draft generation failed: ${res.error}`);
     }
@@ -619,7 +633,7 @@ export default function DMApp() {
     await deleteMessage(messageId);
     
     const simTimeIso = simulatedTime ? new Date(simulatedTime).toISOString() : undefined;
-    const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso);
+    const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso, activeProductId);
     
     if (res.success) {
       await fetchLeadDetails(activeLeadId as string);
@@ -639,7 +653,7 @@ export default function DMApp() {
     
     setIsLoading(true);
     const simTimeIso = simulatedTime ? new Date(simulatedTime).toISOString() : new Date().toISOString();
-    const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso);
+    const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso, activeProductId);
     
     if (res.success) {
       setInputText('');
@@ -679,7 +693,7 @@ export default function DMApp() {
       }
 
       const simTimeIso = simulatedTime ? new Date(simulatedTime).toISOString() : undefined;
-      const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso);
+      const res = await generateDraftResponse(leadDetails.id, leadDetails.client_id, simTimeIso, activeProductId);
       if (!res.success) {
         toast.error(`Draft generation failed: ${res.error}`);
       }
@@ -716,6 +730,33 @@ export default function DMApp() {
     const all: any[] = leadDetails?.Conversation || [];
     return activeChatStage === 'all' ? all : all.filter(m => m.stage === activeChatStage);
   }, [leadDetails, activeChatStage]);
+
+  const timelineStages = useMemo(() => {
+    const nums = new Set<number>();
+    editMemoryConversations.forEach((m: any) => nums.add(m.stage ?? 1));
+    return Array.from(nums).sort((a, b) => a - b);
+  }, [editMemoryConversations]);
+
+  const timelineMessages = useMemo(
+    () => timelineStage === 'all' ? editMemoryConversations : editMemoryConversations.filter((m: any) => m.stage === timelineStage),
+    [editMemoryConversations, timelineStage]
+  );
+
+  const confirmDeleteMessage = async () => {
+    if (!deleteMsgId) return;
+    setIsDeletingMsg(true);
+    try {
+      await editConversationMessage(deleteMsgId, '__DELETE__');
+      setEditingMsgId(null);
+      toast.success('Message deleted');
+      await refreshTimeline();
+      setDeleteMsgId(null);
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to delete message.');
+    }
+    setIsDeletingMsg(false);
+  };
 
   const refreshTimeline = async () => {
     const data = await getLeadDetails(editMemoryLeadId);
@@ -869,6 +910,7 @@ export default function DMApp() {
                         <DropdownMenuItem onClick={async (e) => {
                           e.stopPropagation();
                           setEditMemoryLeadId(lead.id);
+                          setTimelineStage('all');
                           setEditMemoryText(lead.LeadState?.leadSummary || '');
                           setEditMemoryStage(lead.LeadState?.stage || 1);
                           setEditMemoryConnection(lead.LeadState?.connectionLevel || 'LOW');
@@ -883,6 +925,17 @@ export default function DMApp() {
                         }}>
                           <span className="material-symbols-sharp mr-2 text-[1.1rem]">memory</span>
                           Edit Long Term Memory
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeleteLeadTarget({ id: lead.id, name: lead.name });
+                            setTimeout(() => setShowDeleteLead(true), 10);
+                          }}
+                        >
+                          <span className="material-symbols-sharp mr-2 text-[1.1rem]">delete</span>
+                          Remove Lead
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -1316,6 +1369,20 @@ export default function DMApp() {
               </div>
             ) : (
               <div className="space-y-2 max-h-[65vh] overflow-y-auto pr-2 custom-scrollbar">
+                {timelineStages.length > 1 && (
+                  <div className="sticky top-0 z-20 flex items-center gap-2 py-2 bg-card overflow-x-auto [scrollbar-width:none]">
+                    {(['all', ...timelineStages] as (number | 'all')[]).map(tab => (
+                      <button
+                        key={tab}
+                        onClick={() => setTimelineStage(tab)}
+                        className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap border transition-colors ${timelineStage === tab ? 'bg-primary text-primary-foreground border-primary' : 'bg-background text-muted-foreground border-border hover:text-foreground'}`}
+                      >
+                        {tab === 'all' ? 'All' : stageLabel(tab)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 {/* Insert at top */}
                 <div className="flex justify-center py-1 opacity-0 hover:opacity-100 transition-opacity z-10 relative">
                   <Button size="sm" variant="outline" className="h-6 rounded-full text-xs bg-background border-border shadow-sm" onClick={() => setInsertTargetMsgId(null)}>
@@ -1325,9 +1392,9 @@ export default function DMApp() {
 
                 {insertTargetMsgId === null && renderInsertForm(null)}
 
-                  {editMemoryConversations.map((msg: any, idx: number) => (
+                  {timelineMessages.map((msg: any, idx: number) => (
                     <React.Fragment key={msg.id.toString()}>
-                      {(idx === 0 || editMemoryConversations[idx - 1].stage !== msg.stage) && (
+                      {(idx === 0 || timelineMessages[idx - 1].stage !== msg.stage) && (
                         <div className="flex items-center gap-4 py-4">
                           <div className="flex-1 h-[1px] bg-border"></div>
                           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground bg-background px-3 border border-border rounded-full shadow-sm">
@@ -1379,18 +1446,7 @@ export default function DMApp() {
                                   </div>
                                   <Textarea value={editingMsgContent} onChange={e => setEditingMsgContent(e.target.value)} className="text-sm min-h-[60px]" />
                                   <div className="flex justify-between gap-2">
-                                    <Button variant="ghost" size="sm" className="h-7 text-xs text-destructive hover:text-destructive" onClick={async () => {
-                                      if (!confirm('Delete this message?')) return;
-                                      await editConversationMessage(msg.id.toString(), '__DELETE__');
-                                      setEditingMsgId(null);
-                                      toast.success('Message deleted');
-                                      const data = await getLeadDetails(editMemoryLeadId);
-                                      setEditMemoryConversations(data?.Conversation || []);
-                                      if (activeLeadId === editMemoryLeadId) {
-                                        const activeData = await getLeadDetails(activeLeadId);
-                                        setLeadDetails(JSON.parse(JSON.stringify(activeData)));
-                                      }
-                                    }}>
+                                    <Button variant="ghost" size="sm" className="h-7 text-xs text-destructive hover:text-destructive" onClick={() => setDeleteMsgId(msg.id.toString())}>
                                       <span className="material-symbols-sharp text-[1rem] mr-1">delete</span>Delete
                                     </Button>
                                     <div className="flex gap-2">
@@ -1481,8 +1537,32 @@ export default function DMApp() {
         </DialogContent>
       </Dialog>
 
+      {/* Delete Message Modal */}
+      <Dialog open={deleteMsgId !== null} onOpenChange={(open) => { if (!open) setDeleteMsgId(null); }}>
+        <DialogContent className="sm:max-w-md border-destructive/20">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <span className="material-symbols-sharp">warning</span>
+              Delete Message
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-4 space-y-2">
+            <p className="text-sm text-foreground">Are you sure you want to delete this message?</p>
+            <p className="text-sm text-muted-foreground">This action cannot be undone.</p>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setDeleteMsgId(null)} disabled={isDeletingMsg}>
+              Cancel
+            </Button>
+            <Button type="button" variant="destructive" onClick={confirmDeleteMessage} disabled={isDeletingMsg}>
+              {isDeletingMsg ? 'Deleting...' : 'Delete Message'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Delete Lead Modal */}
-      <Dialog open={showDeleteLead} onOpenChange={setShowDeleteLead}>
+      <Dialog open={showDeleteLead} onOpenChange={(open) => { setShowDeleteLead(open); if (!open) setDeleteLeadTarget(null); }}>
         <DialogContent className="sm:max-w-md border-destructive/20">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
@@ -1492,14 +1572,14 @@ export default function DMApp() {
           </DialogHeader>
           <div className="py-4 space-y-4">
             <p className="text-sm text-foreground">
-              Are you sure you want to delete <strong>{leadDetails?.name}</strong>?
+              Are you sure you want to delete <strong>{deleteLeadTarget?.name ?? leadDetails?.name}</strong>?
             </p>
             <p className="text-sm text-muted-foreground">
               All chat history, state, and context for this lead will be permanently deleted. This action cannot be undone.
             </p>
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setShowDeleteLead(false)} disabled={isLoading}>
+            <Button type="button" variant="outline" onClick={() => { setShowDeleteLead(false); setDeleteLeadTarget(null); }} disabled={isLoading}>
               Cancel
             </Button>
             <Button type="button" variant="destructive" onClick={confirmDeleteLead} disabled={isLoading}>
@@ -1702,10 +1782,10 @@ export default function DMApp() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-primary">
               <span className="material-symbols-sharp">bug_report</span>
-              Active System Prompt (Stage {leadDetails?.LeadState?.stage})
+              Active Prompt (Stage {leadDetails?.LeadState?.stage})
             </DialogTitle>
             <DialogDescription>
-              This is the exact instructional prompt given to the AI for the current stage. It governs how the AI will draft its response.
+              This is exactly what the AI receives for its next draft: the stage prompt, lead profile, product PVPS, global client context, attached files and chat history.
             </DialogDescription>
           </DialogHeader>
 
