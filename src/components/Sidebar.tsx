@@ -42,6 +42,8 @@ import {
   UserPlus,
   Link as LinkIcon,
   Users,
+  PanelLeft,
+  PanelLeftClose,
 } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
 
@@ -140,6 +142,7 @@ const oldItems = [
 
 interface SidebarProps {
   collapsed: boolean;
+  setCollapsed?: (val: boolean) => void;
 }
 
 // ─── UI Helpers ───────────────────────────────────────────────────────────────
@@ -224,7 +227,7 @@ function GroupLabel({ children, collapsed }: { children: React.ReactNode; collap
 
 // ─── Main Sidebar Component ───────────────────────────────────────────────────
 
-export function Sidebar({ collapsed }: SidebarProps) {
+export function Sidebar({ collapsed, setCollapsed }: SidebarProps) {
   const { theme, setTheme } = useAppStore();
 
   const handleSignOut = () => {
@@ -240,12 +243,12 @@ export function Sidebar({ collapsed }: SidebarProps) {
     <div className="flex h-full min-h-0 shrink-0 z-20">
       <div
         className="relative h-full min-h-0 flex flex-col transition-all duration-300 ease-in-out"
-        style={{ width: collapsed ? '3rem' : '16rem' }}
+        style={{ width: collapsed ? '3.5rem' : '16rem' }}
       >
         <div className="h-full min-h-0 w-full bg-[hsl(240,5.9%,10%)] border-r border-[hsl(240,3.7%,15.9%)] flex flex-col text-[hsl(240,4.8%,95.9%)] overflow-hidden">
 
           {/* ── Header: VIPScale logo → external link ── */}
-          <div className="flex h-[60px] items-center px-2 shrink-0 border-b border-[hsl(240,3.7%,15.9%)]">
+          <div className="flex h-[60px] items-center px-3 shrink-0 border-b border-[hsl(240,3.7%,15.9%)]">
             <a
               href="https://tools.vipscaleph.com/protected"
               target="_blank"
@@ -352,7 +355,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           </div>
 
           {/* ── Footer (no border-t separator) ── */}
-          <div className={`px-2 py-2 shrink-0 space-y-px flex flex-col ${collapsed ? 'items-center' : ''}`}>
+          <div className={`px-3 py-3 shrink-0 space-y-1 flex flex-col ${collapsed ? 'items-center' : ''}`}>
 
             {/* DM Agent — active/highlighted (this app), no link */}
             <div
@@ -400,10 +403,26 @@ export function Sidebar({ collapsed }: SidebarProps) {
               <LogOut className="size-4 shrink-0 text-red-500" />
               {!collapsed && <span>Sign Out</span>}
             </button>
+
+            <div className="h-px bg-[hsl(240,3.7%,15.9%)] w-full my-2"></div>
+
+            {/* Sidebar Expand/Collapse Toggle */}
+            <button
+              onClick={() => setCollapsed?.(!collapsed)}
+              title={collapsed ? 'Expand menu' : 'Collapse menu'}
+              className={btnClass(collapsed)}
+            >
+              {collapsed ? (
+                <PanelLeft className="size-5 shrink-0 text-zinc-400" />
+              ) : (
+                <PanelLeftClose className="size-5 shrink-0 text-zinc-400" />
+              )}
+              {!collapsed && <span className="font-medium text-zinc-400">Collapse menu</span>}
+            </button>
           </div>
 
         </div>
       </div>
     </div>
   );
-}
+}

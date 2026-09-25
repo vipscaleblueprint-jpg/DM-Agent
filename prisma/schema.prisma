@@ -8,17 +8,17 @@ datasource db {
 }
 
 model Client {
-  id        String   @id
-  name      String
-  fb_link   String?
-  context   String?
-  vps       String?
-  persona   String?
+  id          String        @id
+  name        String
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
-  Lead        Lead[]
+  fb_link     String?
+  context     String?
+  persona     String?
+  vps         String?
   ClientStage ClientStage[]
-  Product   Product[]
+  Lead        Lead[]
+  Product     Product[]
 }
 
 model Product {
@@ -29,13 +29,15 @@ model Product {
   persona      String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
-  Client       Client   @relation(fields: [client_id], references: [id], onDelete: Cascade)
   Lead         Lead[]
+  Client       Client   @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  ClientStage  ClientStage[]
 }
 
 model ClientStage {
   id              String   @id @default(uuid())
   client_id       String
+  product_id      String?
   stageOrder      Int
   stageName       String
   systemPrompt    String
@@ -43,6 +45,7 @@ model ClientStage {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   Client          Client   @relation(fields: [client_id], references: [id])
+  Product         Product? @relation(fields: [product_id], references: [id], onDelete: Cascade)
 }
 
 model Conversation {
@@ -50,8 +53,9 @@ model Conversation {
   lead_id   String
   role      MessageRole
   content   String
-  stage     Int?
   createdAt DateTime    @default(now())
+  stage     Int?
+  autoDraft Boolean     @default(false)
   Lead      Lead        @relation(fields: [lead_id], references: [id])
 }
 
@@ -64,12 +68,13 @@ model Intent {
 
 model Lead {
   id              String            @id
-  name            String            @default("Unknown Lead")
-  fb_link         String?
   client_id       String
-  product_id      String?
   createdAt       DateTime          @default(now())
   updatedAt       DateTime
+  fb_link         String?
+  name            String            @default("Unknown Lead")
+  product_id      String?
+  timezone        String?
   Conversation    Conversation[]
   Client          Client            @relation(fields: [client_id], references: [id])
   Product         Product?          @relation(fields: [product_id], references: [id])
@@ -83,11 +88,13 @@ model LeadState {
   stageName             String             @default("getting_to_know")
   primary_intent_id     String?
   connectionLevel       ConnectionLevel    @default(LOW)
-  assessmentData        Json?              @default("{}")
   lastStageChangeReason String?
   nextStageRequirement  String?
-  leadSummary           String?
   updatedAt             DateTime           @updatedAt
+  leadSummary           String?
+  assessmentData        Json?              @default("{}")
+  leadStatus            String             @default("NOT_HOT") // HOT | NOT_HOT | NOT_QUALIFIED
+  leadStatusManual      Boolean            @default(false)      // true = flagged by the user, the AI won't change it
   Lead                  Lead               @relation(fields: [lead_id], references: [id])
   Intent                Intent?            @relation(fields: [primary_intent_id], references: [id])
   SecondaryIntents      SecondaryIntents[]

@@ -1,4 +1,5 @@
 'use server';
+import { DEFAULT_STAGE_1_PROMPT } from '@/lib/defaultStage1Prompt';
 
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
@@ -167,25 +168,31 @@ export async function getClientStage(clientId: string, stageOrder: number) {
   return JSON.parse(JSON.stringify(stage));
 }
 
-export async function getClientStages(clientId: string) {
+export async function getClientStages(clientId: string, productId?: string | null) {
   const stages = await prisma.clientStage.findMany({
-    where: { client_id: clientId },
+    where: { client_id: clientId, product_id: productId || null },
     orderBy: { stageOrder: 'asc' }
   });
+  if (stages.length === 0) {
+    return [{
+      stageOrder: 1,
+      stageName: 'getting_to_know',
+      systemPrompt: DEFAULT_STAGE_1_PROMPT,
+      checklistConfig: []
+    }];
+  }
   return JSON.parse(JSON.stringify(stages));
 }
 
-export async function saveClientStages(clientId: string, stages: any[]) {
-  // First, delete existing stages for this client
+export async function saveClientStages(clientId: string, productId: string | null, stages: any[]) {
   await prisma.clientStage.deleteMany({
-    where: { client_id: clientId }
+    where: { client_id: clientId, product_id: productId || null }
   });
-
-  // Then create new ones
   for (const stage of stages) {
     await prisma.clientStage.create({
       data: {
         client_id: clientId,
+        product_id: productId || null,
         stageOrder: stage.stageOrder,
         stageName: stage.stageName,
         systemPrompt: stage.systemPrompt,
@@ -251,7 +258,7 @@ You are currently in Stage ${stage}. If the chat history shows that you have pre
 Current Time: ${simulatedTime || new Date().toISOString()}
 
 Current Lead Profile:
-Name: ${lead?.name || 'Unknown'}
+First Name (Use this if greeting): ${lead?.name ? lead.name.split(' ')[0] : 'Unknown'}
 Stage: ${stage} (${stageName})
 Long Term Memory (Summary & Context):
 ${leadState?.leadSummary || 'No long term memory recorded yet.'}
@@ -282,7 +289,7 @@ export async function getFullSystemPrompt(leadId: string, clientId: string) {
   };
 }
 
-export async function generateDraftResponse(leadId: string, clientId: string, simulatedTime?: string) {
+export async function generateDraftResponse(leadId: string, clientId: string, simulatedTime?: string, options?: { followUpNumber?: number }) {
   if (!process.env.API_KEY) {
     return { success: false, error: 'API_KEY is not set in .env' };
   }
@@ -326,7 +333,14 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
         reason: z.string().describe('Brief explanation for stage promotion decision'),
         next_stage: z.number().describe('The stage they should be in next'),
         summary: z.string().optional().describe('Brief summary of what we know about the lead so far'),
-        assessment_updates: z.record(z.string(), z.any()).describe('A dictionary updating any dynamic checklist keys for this stage. Key is the checklist item ID, value is the updated value (e.g. boolean, string).')
+        assessment_updates: z.record(z.string(), z.any()).describe('A dictionary updating any dynamic checklist keys for this stage. Key is the checklist item ID, value is the updated value (e.g. boolean, string).'),
+        latest_message_sender: z.enum(['ME', 'LEAD']).optional().describe('Who sent the latest message'),
+        lead_status: z.enum(['HOT', 'NOT_HOT', 'NOT_QUALIFIED']).optional().describe('Lead status assessment based on instructions'),
+        stage_exit_criteria_met: z.boolean().optional().describe('Whether all Stage 1 exit criteria are met'),
+        basic_rapport_captured: z.boolean().optional().describe('Basic Rapport & Personal Context: Captured or Missing'),
+        current_situation_captured: z.boolean().optional().describe('Current Situation & Prompt: Captured or Missing'),
+        frustrations_captured: z.boolean().optional().describe('Frustrations & Desired Change: Captured or Missing'),
+        prior_exploration_captured: z.boolean().optional().describe('Prior Exploration: Captured or Missing')
       }),
     });
 
@@ -349,6 +363,7 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
         connectionLevel: object.connection_level === 'LOW' || object.connection_level === 'MEDIUM' || object.connection_level === 'HIGH' ? object.connection_level : undefined,
         lastStageChangeReason: object.reason,
         leadSummary: object.summary,
+        leadStatus: leadState?.leadStatusManual ? undefined : (object.lead_status || undefined),
         assessmentData: newAssessmentData,
         updatedAt: new Date()
       }
@@ -449,7 +464,7 @@ export async function uploadFileToR2(formData: FormData) {
   }
 }
 
-export async function addLead(name: string, fbLink?: string, clientId?: string, productId?: string | null) {
+export async function addLead(name: string, fbLink?: string, clientId?: string, productId?: string | null, timezone?: string | null) {
   const leadId = `lead_${Date.now()}`;
   
   let targetClientId = clientId;
@@ -471,9 +486,10 @@ export async function addLead(name: string, fbLink?: string, clientId?: string, 
     data: {
       id: leadId,
       name,
-      fb_link: fbLink || null,
-      client_id: targetClientId,
-      product_id: productId || null,
+        fb_link: fbLink || null,
+        client_id: targetClientId,
+        product_id: productId || null,
+        timezone: timezone || null,
       updatedAt: new Date(),
       LeadState: {
         create: {
@@ -489,26 +505,31 @@ export async function addLead(name: string, fbLink?: string, clientId?: string, 
   return leadId;
 }
 
-export async function getPromptForStage(stage: number, clientId: string) {
+export async function getPromptForStage(stage: number, clientId: string, productId?: string | null) {
   const clientStage = await prisma.clientStage.findFirst({
-    where: { client_id: clientId, stageOrder: stage }
+    where: { client_id: clientId, stageOrder: stage, product_id: productId || null }
   });
   
   if (clientStage && clientStage.systemPrompt) {
     return clientStage.systemPrompt;
   }
   
+  if (stage === 1) {
+    return DEFAULT_STAGE_1_PROMPT;
+  }
+  
   // Fallback if no stage config is found
   return "You are an AI sales assistant. Guide the user through the sales process.";
 }
 
-export async function editLead(leadId: string, name: string, fbLink?: string) {
+export async function editLead(leadId: string, name: string, fbLink?: string, timezone?: string | null) {
   await prisma.lead.update({
     where: { id: leadId },
     data: {
       name,
-      fb_link: fbLink || null,
-      updatedAt: new Date()
+        fb_link: fbLink || null,
+        timezone: timezone || null,
+        updatedAt: new Date()
     }
   });
   revalidatePath('/');
@@ -866,3 +887,124 @@ export async function syncVipscaleClients() {
     return { success: false, error: err.message };
   }
 }
+
+const WEBHOOK_URL_PVPS = "https://n8n.heysnaply.com/webhook/pvps";
+
+export async function generatePvpsN8n(clientId: string, clientName: string | null, productName: string, about: string) {
+  const body = {
+    client_id: clientId,
+    client_name: clientName,
+    product_name: productName,
+    about: about,
+    submitted_at: new Date().toISOString(),
+  };
+
+  try {
+    const res = await fetch(WEBHOOK_URL_PVPS, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+    if (!res.ok) return { success: false, error: 'n8n returned an error.' };
+    let payload: any = await res.json();
+    if (Array.isArray(payload)) payload = payload[0];
+    const statement = payload?.statement ? String(payload.statement).trim() : "";
+    if (!statement) return { success: false, error: "n8n did not return a PVPS." };
+    return { success: true, statement };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function addProductBothDbs(clientId: string, productName: string, pvps: string, about: string) {
+  try {
+    const productId = `prod_${Date.now()}`;
+    
+    // Save to DM-Agent DB
+    const client = await prisma.client.findUnique({ where: { id: clientId } });
+    if (!client) throw new Error("Client not found locally");
+
+    await prisma.product.create({
+      data: {
+        id: productId,
+        client_id: clientId,
+        product_name: productName,
+        vps: pvps,
+        persona: about || null,
+        updatedAt: new Date(),
+      }
+    });
+
+    revalidatePath('/');
+
+    // 2. We need the VIPScale client ID to insert into Supabase
+    // We can fetch the clients from VIPScale and match by name
+    const apiKey = process.env.VIPSCALE_API_KEY_SECRET;
+    const toolsUrl = process.env.VIPSCALE_TOOLS_URL || "https://tools.vipscaleph.com";
+    let vipscaleClientId = null;
+    
+    if (apiKey) {
+      const response = await fetch(`${toolsUrl}/api/clients`, {
+        method: "GET",
+        headers: { "x-api-key": apiKey },
+        cache: "no-store",
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const vsClients = data.clients || [];
+        const vsClient = vsClients.find((c: any) => c.name === client.name);
+        if (vsClient) {
+          vipscaleClientId = vsClient.id;
+        }
+      }
+    }
+
+    if (!vipscaleClientId) {
+      console.warn("Could not find matching client in VIPScale by name. Supabase insert may fail if client_id is strictly a foreign key.");
+      vipscaleClientId = clientId; // fallback
+    }
+
+    // Save to VIPScale DB via Supabase
+    const supabaseUrl = 'https://qiavwjheyschrfeaqply.supabase.co';
+    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpYXZ3amhleXNjaHJmZWFxcGx5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NzE3MzA3NCwiZXhwIjoyMDgyNzQ5MDc0fQ.6pFhthGxzoEbZaoyAb8pc8EhomXXm3AH1l0F2KXsIoc';
+    
+    const payload = {
+      client_id: vipscaleClientId,
+      product_name: productName,
+      pvps: pvps,
+      about_file: about || null,
+    };
+
+    const res = await fetch(`${supabaseUrl}/rest/v1/products`, {
+      method: 'POST',
+      headers: {
+        'apikey': supabaseKey,
+        'Authorization': `Bearer ${supabaseKey}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify(payload)
+    });
+    
+    if (!res.ok) {
+       console.error("Failed to insert into vipscale db", await res.text());
+    }
+
+    return { success: true, productId };
+  } catch (err: any) {
+    console.error("addProductBothDbs Error:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+export async function setLeadQualification(leadId: string, isNotQualified: boolean) {
+  const status = isNotQualified ? 'NOT_QUALIFIED' : 'NOT_HOT';
+  await prisma.leadState.upsert({
+    where: { lead_id: leadId },
+    update: { leadStatus: status, leadStatusManual: true },
+    create: { lead_id: leadId, leadStatus: status, leadStatusManual: true }
+  });
+  revalidatePath('/');
+}
+
