@@ -175,6 +175,7 @@ export default function DMApp() {
   const [leadTab, setLeadTab] = useState<'all' | 'followup' | 'not_qualified'>('all');
   const [leadSort, setLeadSort] = useState<'default' | 'latest' | 'oldest' | 'name'>('default');
   const [leadStageFilter, setLeadStageFilter] = useState<string[]>([]);
+  const [leadHotFilter, setLeadHotFilter] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [clientSearchQuery, setClientSearchQuery] = useState('');
   
@@ -828,13 +829,16 @@ export default function DMApp() {
     if (leadStageFilter.length > 0) {
       list = list.filter(lead => leadStageFilter.includes(String(lead.LeadState?.stage ?? 1)));
     }
+    if (leadHotFilter) {
+      list = list.filter(lead => lead.LeadState?.leadStatus === 'HOT');
+    }
     if (leadSort === 'default') return list; // tab order: newest lead first, or most overdue first for Follow Up
     const lastAt = (lead: any) => (lead.lastMessage ? new Date(lead.lastMessage.createdAt).getTime() : 0);
     return [...list].sort((a, b) => {
       if (leadSort === 'name') return (a.name || '').localeCompare(b.name || '');
       return leadSort === 'latest' ? lastAt(b) - lastAt(a) : lastAt(a) - lastAt(b);
     });
-  }, [leads, followUpLeads, leadTab, searchQuery, leadStageFilter, leadSort]);
+  }, [leads, followUpLeads, leadTab, searchQuery, leadStageFilter, leadSort, leadHotFilter]);
 
   const stageLabel = (num: number) => {
     const name = funnelStages.find((st: any) => st.stageOrder === num)?.stageName;
@@ -961,11 +965,111 @@ export default function DMApp() {
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden p-3 gap-3">
       {/* Top Header */}
-      <div className="px-2 pt-1 shrink-0">
-        <h2 className="flex items-center gap-2.5 font-bold tracking-tight text-[18px]">
-          <span className="material-symbols-sharp text-primary text-[1.8rem]">smart_toy</span>
+      <div className="px-3 pt-3 pb-3 shrink-0 flex items-center justify-start gap-4 min-h-[60px] border-b border-border/10">
+        <h2 className="flex items-center gap-2 font-bold tracking-tight text-[18px] whitespace-nowrap">
+          <span className="material-symbols-sharp text-primary text-[1.6rem]">smart_toy</span>
           DM Agent
         </h2>
+        <DropdownMenu>
+          <DropdownMenuTrigger className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md border border-border bg-card hover:bg-secondary text-card-foreground transition-all outline-none focus-visible:ring-2 focus-visible:ring-ring shadow-sm min-w-0 max-w-[250px]">
+            <div className="flex items-center gap-3 overflow-hidden text-left">
+              <div className="flex items-center justify-center w-8 h-8 rounded-md bg-primary/20 text-primary shrink-0">
+                <span className="material-symbols-sharp text-[1.2rem]">apartment</span>
+              </div>
+              <div className="flex flex-col min-w-0 justify-center">
+                <span className="font-bold truncate text-[15px] leading-none text-foreground">
+                  {clients.find(c => c.id === activeClientId)?.name || 'Loading...'}
+                </span>
+                {activeProductId && (
+                  <span className="text-[11px] text-muted-foreground truncate mt-1 leading-none">
+                    {clients.find(c => c.id === activeClientId)?.Product?.find((p:any) => p.id === activeProductId)?.product_name}
+                  </span>
+                )}
+              </div>
+            </div>
+            <span className="material-symbols-sharp text-muted-foreground shrink-0 text-[1.1rem]">unfold_more</span>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-[280px]">
+            <div className="p-2 border-b border-border mb-1">
+              <div className="relative">
+                <span className="material-symbols-sharp absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground text-[1.1rem]">search</span>
+                <Input 
+                  autoFocus
+                  placeholder="Search clients..."
+                  value={clientSearchQuery}
+                  onChange={e => setClientSearchQuery(e.target.value)}
+                  onKeyDown={e => e.stopPropagation()}
+                  className="h-8 pl-8 text-xs"
+                />
+              </div>
+            </div>
+            <div className="max-h-[300px] overflow-y-auto">
+              {filteredClients.length === 0 ? (
+                 <div className="py-3 text-center text-xs text-muted-foreground">No clients found</div>
+              ) : (
+                filteredClients.map(client => {
+                  const hasProducts = client.Product && client.Product.length > 0;
+                  const isActiveClient = activeClientId === client.id;
+                  
+                  return (
+                    <DropdownMenuSub key={client.id}>
+                      <DropdownMenuSubTrigger className={`flex items-center justify-between ${isActiveClient ? 'bg-primary/10 text-primary font-medium' : ''}`}>
+                        <span>{client.name}</span>
+                        {isActiveClient && <span className="material-symbols-sharp text-primary text-[1.1rem] ml-2">check</span>}
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent>
+                        <DropdownMenuItem onClick={() => { setActiveClientId(client.id); setActiveProductId(null); }} className="flex justify-between font-semibold">
+                          <span>Global Leads (No Product)</span>
+                          {isActiveClient && activeProductId === null && <span className="material-symbols-sharp text-primary text-[1.1rem] ml-2">check</span>}
+                        </DropdownMenuItem>
+                        
+                        {hasProducts && (
+                          <>
+                            <DropdownMenuSeparator />
+                            {client.Product.map((prod: any) => (
+                              <DropdownMenuItem key={prod.id} onClick={() => { setActiveClientId(client.id); setActiveProductId(prod.id); }} className="flex justify-between">
+                                <span>{prod.product_name}</span>
+                                {isActiveClient && activeProductId === prod.id && <span className="material-symbols-sharp text-primary text-[1.1rem] ml-2">check</span>}
+                              </DropdownMenuItem>
+                            ))}
+                          </>
+                        )}
+                        
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onClick={() => {
+                          setActiveClientId(client.id);
+                          setShowAddProduct(true);
+                        }}>
+                          <span className="material-symbols-sharp mr-2 text-[1.1rem] text-muted-foreground">add</span>
+                          Add Product
+                        </DropdownMenuItem>
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                  );
+                }))}
+            </div>
+            <div className="h-px bg-border my-1 mx-2" />
+            {process.env.NODE_ENV === 'development' && (
+              <DropdownMenuItem onClick={handleSyncClients} disabled={isLoading}>
+                <span className="material-symbols-sharp mr-2 text-[1.1rem] text-muted-foreground">sync</span>
+                Sync Clients from Tools (Dev Only)
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem onClick={openContextModal}>
+              <span className="material-symbols-sharp mr-2 text-[1.1rem] text-muted-foreground">settings</span>
+              Client Settings
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => {
+              setNewClientName('');
+
+              setShowAddClient(true);
+            }}>
+              <span className="material-symbols-sharp mr-2 text-[1.1rem] text-muted-foreground">add</span>
+              Add New Client
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       <div className="flex-1 flex flex-col lg:flex-row h-full min-h-0 overflow-hidden gap-3">
@@ -1035,8 +1139,8 @@ export default function DMApp() {
                 {/* Filter by stage */}
                 <DropdownMenu>
                   <DropdownMenuTrigger
-                    title="Filter by stage"
-                    className={`h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-full border transition-colors outline-none ${leadStageFilter.length > 0 ? 'bg-primary/15 border-primary/40 text-primary' : 'border-border text-muted-foreground hover:bg-muted/60 hover:text-foreground'}`}
+                    title="Filter"
+                    className={`h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-full border transition-colors outline-none ${leadStageFilter.length > 0 || leadHotFilter ? 'bg-primary/15 border-primary/40 text-primary' : 'border-border text-muted-foreground hover:bg-muted/60 hover:text-foreground'}`}
                   >
                     <span className="material-symbols-sharp text-[1.15rem]">filter_list</span>
                   </DropdownMenuTrigger>
@@ -1068,6 +1172,14 @@ export default function DMApp() {
                           </DropdownMenuCheckboxItem>
                         );
                       })}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel>Status</DropdownMenuLabel>
+                      <DropdownMenuCheckboxItem
+                        checked={leadHotFilter}
+                        onCheckedChange={setLeadHotFilter}
+                      >
+                        Hot Deals 🔥
+                      </DropdownMenuCheckboxItem>
                     </DropdownMenuGroup>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -1115,19 +1227,7 @@ export default function DMApp() {
                       <span className="text-[0.65rem] rounded-full bg-primary/10 text-primary px-2 py-0.5" title={stageLabel(lead.LeadState?.stage ?? 1)}>
                         Stage {lead.LeadState?.stage ?? 1}
                       </span>
-                      {(() => {
-                        const level = lead.LeadState?.connectionLevel || 'LOW';
-                        const style = level === 'HIGH'
-                          ? { label: 'High', cls: 'bg-emerald-500/15 text-emerald-500' }
-                          : level === 'MEDIUM'
-                            ? { label: 'Medium', cls: 'bg-amber-500/15 text-amber-500' }
-                            : { label: 'Low', cls: 'bg-muted text-muted-foreground' };
-                        return (
-                          <span className={`text-[0.65rem] rounded-full px-2 py-0.5 ${style.cls}`} title="Connection level">
-                            Connection: {style.label}
-                          </span>
-                        );
-                      })()}
+
                       {lead.LeadState?.leadStatus === 'HOT' && (
                         <span className="text-[0.65rem] rounded-full bg-red-500/15 text-red-500 px-2 py-0.5 font-semibold" title="Ready to seriously consider the offer">
                           HOT
@@ -1208,101 +1308,7 @@ export default function DMApp() {
           )}
         </ul>
 
-        {/* Client Switcher Bottom Menu */}
-        <div className="p-3 border-t border-border bg-card shrink-0">
-          <DropdownMenu>
-            <DropdownMenuTrigger className="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border border-border bg-card hover:bg-secondary text-card-foreground transition-all outline-none focus-visible:ring-2 focus-visible:ring-ring shadow-sm">
-              <div className="flex items-center gap-3 overflow-hidden text-left">
-                <div className="flex items-center justify-center w-9 h-9 rounded-md bg-primary/20 text-primary shrink-0">
-                  <span className="material-symbols-sharp text-[1.3rem]">apartment</span>
-                </div>
-                <div className="flex flex-col min-w-0 justify-center">
-                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest font-semibold mb-0.5">Active Client</span>
-                  <span className="font-bold truncate text-base leading-none text-foreground">
-                    {clients.find(c => c.id === activeClientId)?.name || 'Loading...'}
-                  </span>
-                  {activeProductId && (
-                    <span className="text-xs text-muted-foreground truncate mt-1">
-                      {clients.find(c => c.id === activeClientId)?.Product?.find((p:any) => p.id === activeProductId)?.product_name}
-                    </span>
-                  )}
-                </div>
-              </div>
-              <span className="material-symbols-sharp text-muted-foreground shrink-0">unfold_more</span>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-[280px]">
-              <div className="p-2 border-b border-border mb-1">
-                <div className="relative">
-                  <span className="material-symbols-sharp absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground text-[1.1rem]">search</span>
-                  <Input 
-                    autoFocus
-                    placeholder="Search clients..."
-                    value={clientSearchQuery}
-                    onChange={e => setClientSearchQuery(e.target.value)}
-                    onKeyDown={e => e.stopPropagation()}
-                    className="h-8 pl-8 text-xs"
-                  />
-                </div>
-              </div>
-              <div className="max-h-[300px] overflow-y-auto">
-                {filteredClients.length === 0 ? (
-                   <div className="py-3 text-center text-xs text-muted-foreground">No clients found</div>
-                ) : (
-                  filteredClients.map(client => {
-                    const hasProducts = client.Product && client.Product.length > 0;
-                    const isActiveClient = activeClientId === client.id;
-                    
-                    return (
-                      <DropdownMenuSub key={client.id}>
-                        <DropdownMenuSubTrigger className={`flex items-center justify-between ${isActiveClient ? 'bg-primary/10 text-primary font-medium' : ''}`}>
-                          <span>{client.name}</span>
-                          {isActiveClient && <span className="material-symbols-sharp text-primary text-[1.1rem] ml-2">check</span>}
-                        </DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent>
-                          <DropdownMenuItem onClick={() => { setActiveClientId(client.id); setActiveProductId(null); }} className="flex justify-between font-semibold">
-                            <span>Global Leads (No Product)</span>
-                            {isActiveClient && activeProductId === null && <span className="material-symbols-sharp text-primary text-[1.1rem] ml-2">check</span>}
-                          </DropdownMenuItem>
-                          
-                          {hasProducts && (
-                            <>
-                              <DropdownMenuSeparator />
-                              {client.Product.map((prod: any) => (
-                                <DropdownMenuItem key={prod.id} onClick={() => { setActiveClientId(client.id); setActiveProductId(prod.id); }} className="flex justify-between">
-                                  <span>{prod.product_name}</span>
-                                  {isActiveClient && activeProductId === prod.id && <span className="material-symbols-sharp text-primary text-[1.1rem] ml-2">check</span>}
-                                </DropdownMenuItem>
-                              ))}
-                            </>
-                          )}
-                          
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => {
-                            setActiveClientId(client.id);
-                            setShowAddProduct(true);
-                          }}>
-                            <span className="material-symbols-sharp mr-2 text-[1.1rem] text-muted-foreground">add</span>
-                            Add Product
-                          </DropdownMenuItem>
-                        </DropdownMenuSubContent>
-                      </DropdownMenuSub>
-                    );
-                  }))}
-              </div>
-              <div className="h-px bg-border my-1 mx-2" />
-              {process.env.NODE_ENV === 'development' && (
-                <DropdownMenuItem onClick={handleSyncClients} disabled={isLoading}>
-                  <span className="material-symbols-sharp mr-2 text-[1.1rem] text-muted-foreground">sync</span>
-                  Sync Clients from Tools (Dev Only)
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={openContextModal}>
-                <span className="material-symbols-sharp mr-2 text-[1.1rem] text-muted-foreground">settings</span>
-                Client Settings
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+
       </aside>
 
       {/* Main Workspace Area (Chat Interface) */}
@@ -1530,25 +1536,25 @@ export default function DMApp() {
                   placeholder="Simulate a message from the lead..."
                   value={inputText}
                   onChange={e => setInputText(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      if (!isLoading && inputText.trim()) {
-                        handleSendMessage();
-                      }
-                    }
-                  }}
                   disabled={isLoading}
                 />
                 <div className="flex flex-col justify-between h-[100px] shrink-0">
                   <Button
-                    variant="outline"
-                    className="w-[46px] h-[46px] rounded-full shadow-sm bg-card hover:bg-secondary text-primary shrink-0 p-0 flex items-center justify-center"
+                    className="w-[46px] h-[46px] rounded-full shadow-md shrink-0 p-0 flex items-center justify-center bg-primary text-primary-foreground hover:opacity-90 border-0"
                     onClick={handleNoResponseFollowUp}
-                    disabled={isLoading}
-                    title="Follow Up: draft a follow-up message"
+                    disabled={
+                      isLoading ||
+                      !leadDetails ||
+                      isNotQualified(leadDetails) ||
+                      !(hasDraftReady(leadDetails) || ((followUpStatuses.get(leadDetails.id)?.dueAt ?? Infinity) <= nowMs))
+                    }
+                    title={
+                      (!leadDetails || isNotQualified(leadDetails) || !(hasDraftReady(leadDetails) || ((followUpStatuses.get(leadDetails.id)?.dueAt ?? Infinity) <= nowMs)))
+                        ? "Lead doesn't need a follow-up right now"
+                        : "Follow Up: draft a follow-up message"
+                    }
                   >
-                    <span className="material-symbols-sharp text-[1.4rem]">schedule</span>
+                    <span className="material-symbols-sharp text-[1.4rem]" style={{ fontVariationSettings: "'FILL' 1" }}>schedule</span>
                   </Button>
                   <Button
                     className="w-[46px] h-[46px] rounded-full shadow-md shrink-0 p-0 flex items-center justify-center bg-primary text-primary-foreground hover:opacity-90 border-0"
@@ -1708,9 +1714,9 @@ export default function DMApp() {
                       <button
                         key={tab}
                         onClick={() => setTimelineStage(tab)}
-                        className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap border transition-colors ${timelineStage === tab ? 'bg-primary text-primary-foreground border-primary' : 'bg-background text-muted-foreground border-border hover:text-foreground'}`}
+                        className={`px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${timelineStage === tab ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'}`}
                       >
-                        {tab === 'all' ? 'All' : stageLabel(tab)}
+                        Stage {tab}
                       </button>
                     ))}
                   </div>
@@ -1742,24 +1748,27 @@ export default function DMApp() {
                           <div
                             className={`flex items-start gap-3 p-3 rounded-md border shadow-sm group transition-colors ${editingMsgId === msg.id.toString() ? 'bg-primary/5 border-primary/30' : 'bg-card border-border hover:border-primary/20 hover:bg-card/80'}`}
                           >
-                            <span 
-                              className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0 mt-0.5 tracking-wider cursor-pointer hover:opacity-80 transition-opacity ${msg.role === 'user' ? 'bg-primary/20 text-primary' : 'bg-muted text-muted-foreground'}`}
-                              title="Click to toggle role"
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                const newRole = msg.role === 'user' ? 'assistant' : 'user';
-                                await editConversationMessage(msg.id.toString(), msg.content, newRole);
-                                toast.success('Role updated');
-                                const data = await getLeadDetails(editMemoryLeadId);
-                                setEditMemoryConversations(data?.Conversation || []);
-                                if (activeLeadId === editMemoryLeadId) {
-                                  const activeData = await getLeadDetails(activeLeadId);
-                                  setLeadDetails(JSON.parse(JSON.stringify(activeData)));
-                                }
-                              }}
-                            >
-                              {msg.role === 'user' ? 'Lead' : 'AI'}
-                            </span>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0 mt-0.5 tracking-wider cursor-pointer hover:opacity-80 transition-opacity outline-none ${msg.role === 'user' ? 'bg-primary/20 text-primary' : 'bg-muted text-muted-foreground'}`} title="Change role">
+                                {msg.role === 'user' ? 'Lead' : 'AI'}
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="start">
+                                {(['assistant', 'user'] as const).map(r => (
+                                  <DropdownMenuItem key={r} disabled={msg.role === r} onClick={async () => {
+                                    await editConversationMessage(msg.id.toString(), msg.content, r);
+                                    toast.success(`Role updated to ${r === 'user' ? 'Lead' : 'AI'}`);
+                                    const data = await getLeadDetails(editMemoryLeadId);
+                                    setEditMemoryConversations(data?.Conversation || []);
+                                    if (activeLeadId === editMemoryLeadId) {
+                                      const activeData = await getLeadDetails(activeLeadId);
+                                      setLeadDetails(JSON.parse(JSON.stringify(activeData)));
+                                    }
+                                  }}>
+                                    {r === 'user' ? 'Lead (user)' : 'AI (assistant)'}
+                                  </DropdownMenuItem>
+                                ))}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                             <div className="text-sm flex-1 flex flex-col group/msg">
                               <Textarea 
                                 value={msg.content} 
@@ -2321,3 +2330,4 @@ export default function DMApp() {
     </div>
   );
 }
+

@@ -252,6 +252,9 @@ async function buildDraftContext(leadId: string, clientId: string, simulatedTime
   const systemPrompt = `
 ${await getPromptForStage(stage, clientId)}
 
+GLOBAL FORMATTING INSTRUCTION: 
+NEVER use em dashes (—) or hyphens (-) as punctuation to break up sentences. Always use commas, periods, or start a new sentence instead to keep the tone natural and conversational.
+
 CRITICAL INSTRUCTION FOR MANUAL ROLLBACKS:
 You are currently in Stage ${stage}. If the chat history shows that you have previously taken actions or sent messages that belong to a later stage (for example, pitching a product when you should currently be building curiosity), IGNORE THOSE PAST MESSAGES. The user has manually overridden your memory state to force you back to Stage ${stage}. You must strictly follow the Stage ${stage} objective above, as if the future actions in the chat history never happened. Do not apologize or awkwardly try to restart a conversation; just smoothly pick up the conversation from the current context while strictly adhering to your Stage ${stage} objective.
 
@@ -298,6 +301,9 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
 
   const assetUrls = client?.context ? Array.from(client.context.matchAll(/https:\/\/[^\s]+/g)).map(m => m[0]) : [];
   const promptParts: any[] = [{ type: 'text', text: `Chat History:\n${chatHistoryStr}` }];
+  if (options?.followUpNumber) {
+    promptParts.push({ type: 'text', text: `\n[SYSTEM]: This is Follow-up #${options.followUpNumber}. The lead has not responded for a while. Please generate an appropriate follow-up message based on the rules.` });
+  }
   
   for (const url of assetUrls) {
     try {
@@ -327,8 +333,8 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
         drafted_response: z.string().describe('The natural DM response to send to the lead'),
         stage: z.number().describe('The current stage number'),
         stage_name: z.string().describe('Name of the stage'),
-        primary_intent: z.enum(['wealth', 'time_freedom', 'additional_income', 'career_change', 'identity', 'ownership', 'fulfillment', 'clarity', 'legacy', 'other', 'unknown']).optional().describe('The primary intent identified'),
-        connection_level: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional().describe('Connection level built so far'),
+        // primary_intent: z.enum(['wealth', 'time_freedom', 'additional_income', 'career_change', 'identity', 'ownership', 'fulfillment', 'clarity', 'legacy', 'other', 'unknown']).optional().describe('The primary intent identified'),
+        // connection_level: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional().describe('Connection level built so far'),
         stage_ready_for_promotion: z.boolean().describe('Are they ready to advance to the next stage based on exit conditions?'),
         reason: z.string().describe('Brief explanation for stage promotion decision'),
         next_stage: z.number().describe('The stage they should be in next'),
@@ -359,8 +365,8 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
       data: {
         stage: object.next_stage,
         stageName: await resolveStageName(object.next_stage, object.stage_name, clientId),
-        primary_intent_id: (object.primary_intent && object.primary_intent !== 'unknown' && object.primary_intent !== 'other') ? object.primary_intent : null,
-        connectionLevel: object.connection_level === 'LOW' || object.connection_level === 'MEDIUM' || object.connection_level === 'HIGH' ? object.connection_level : undefined,
+        // primary_intent_id: (object.primary_intent && object.primary_intent !== 'unknown' && object.primary_intent !== 'other') ? object.primary_intent : null,
+        // connectionLevel: object.connection_level === 'LOW' || object.connection_level === 'MEDIUM' || object.connection_level === 'HIGH' ? object.connection_level : undefined,
         lastStageChangeReason: object.reason,
         leadSummary: object.summary,
         leadStatus: leadState?.leadStatusManual ? undefined : (object.lead_status || undefined),
