@@ -1450,7 +1450,13 @@ export default function DMApp() {
                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
                          {msg.role === 'user' ? 'Lead' : 'AI Draft'}
                        </span>
-                       <div className={`flex gap-2 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+                       <span 
+                         className="text-[10px] text-muted-foreground/70 cursor-default"
+                         title={msg.createdAt ? new Date(msg.createdAt).toLocaleString() : ''}
+                       >
+                         {msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''}
+                       </span>
+                       <div className={`flex gap-2 items-center ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
                           <button onClick={() => { navigator.clipboard.writeText(msg.content); toast.success('Copied!'); }} className="text-muted-foreground hover:text-foreground transition-colors" title="Copy">
                             <span className="material-symbols-sharp" style={{fontSize: '1rem'}}>content_copy</span>
                           </button>
