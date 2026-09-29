@@ -17,6 +17,7 @@ model Client {
   persona     String?
   vps         String?
   timezone    String?
+  isActive    Boolean       @default(true)
   ClientStage ClientStage[]
   Lead        Lead[]
   Product     Product[]
@@ -30,6 +31,7 @@ model Product {
   persona      String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  isActive     Boolean  @default(true)
   Lead         Lead[]
   Client       Client   @relation(fields: [client_id], references: [id], onDelete: Cascade)
   ClientStage  ClientStage[]

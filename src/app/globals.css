@@ -39,7 +39,7 @@
     --card-foreground: 240 10% 4%;
     --popover: 0 0% 100%;
     --popover-foreground: 240 10% 4%;
-    --primary: 292 84% 61%;
+    --primary: 292 65% 55%; /* Dimmed from 292 84% 61% */
     --primary-foreground: 0 0% 98%;
     --secondary: 240 5% 96%;
     --secondary-foreground: 240 10% 4%;
@@ -51,8 +51,9 @@
     --destructive-foreground: 0 0% 98%;
     --border: 240 6% 90%;
     --input: 240 6% 90%;
-    --ring: 292 84% 61%;
+    --ring: 292 65% 55%;
     --radius: 0.5rem;
+    --icon-default: 240 5% 40%;
   }
 
   .dark {
@@ -75,6 +76,7 @@
     --border: 240 4% 16%;
     --input: 240 4% 16%;
     --ring: 292 84% 61%;
+    --icon-default: 240 5% 65%;
   }
 
   * {
@@ -159,6 +161,10 @@
     'GRAD' 0,
     'opsz' 24;
   vertical-align: middle;
+}
+
+.material-symbols-sharp:not([class*="text-"]) {
+  color: hsl(var(--icon-default));
 }
 
 body[data-scroll-locked] {

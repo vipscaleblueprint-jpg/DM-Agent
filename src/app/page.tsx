@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { TimezoneSelect } from '@/components/TimezoneSelect';
+import { LiveTime } from '@/components/LiveTime';
 import { getFollowUpStatus, isValidTimezone, browserTimezone } from '@/lib/followup';
 import { setLeadQualification, getLeads, editLeadMemory, editStructuredLeadMemory, insertConversationMessage, setMessageStageFrom, getLeadDetails, generateDraftResponse, addLead, getPresignedUrl, sendLeadMessage, saveClientContext, uploadFileToR2, getGlobalClient, getPromptForStage, getFullSystemPrompt, editLead, removeLead, editConversationMessage, learnFromCorrection, deleteMessage, getClients, addClient, getClientStage, editClient, getClientStages, saveClientStages, syncVipscaleClients } from './actions';
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { Calendar } from "@/components/ui/calendar";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import {
@@ -159,6 +161,11 @@ export default function DMApp() {
   const [leadDetails, setLeadDetails] = useState<any>(null);
   const [activeStageConfig, setActiveStageConfig] = useState<any>(null);
   const [inputText, setInputText] = useState('');
+  const [showSendTimeModal, setShowSendTimeModal] = useState(false);
+  const [sendDate, setSendDate] = useState<Date>(new Date());
+  const [sendHour, setSendHour] = useState("12");
+  const [sendMinute, setSendMinute] = useState("00");
+  const [sendAmPm, setSendAmPm] = useState('PM');
   const [contextText, setContextText] = useState('');
   const [contextUrls, setContextUrls] = useState<string[]>([]);
   const [isSavingContext, setIsSavingContext] = useState(false);
@@ -675,13 +682,36 @@ export default function DMApp() {
     }
   };
 
-  const handleSendMessage = async () => {
+  const handleSendMessage = () => {
     if (!leadDetails || !inputText.trim()) return;
     
+    // Set custom dropdown states to now
+    const now = new Date();
+    setSendDate(now);
+    
+    let h = now.getHours();
+    setSendAmPm(h >= 12 ? 'PM' : 'AM');
+    h = h % 12;
+    if (h === 0) h = 12;
+    setSendHour(h.toString());
+    setSendMinute(now.getMinutes().toString().padStart(2, '0'));
+    setShowSendTimeModal(true);
+  };
+
+  const confirmSendMessage = async () => {
+    if (!leadDetails || !inputText.trim()) return;
+    
+    setShowSendTimeModal(false);
     setIsLoading(true);
     let finalPayload = inputText;
+    
+    let h24 = parseInt(sendHour) || 12;
+    let min = parseInt(sendMinute) || 0;
+    if (sendAmPm === 'PM' && h24 !== 12) h24 += 12;
+    if (sendAmPm === 'AM' && h24 === 12) h24 = 0;
+    const sentAt = new Date(sendDate.getFullYear(), sendDate.getMonth(), sendDate.getDate(), h24, min);
 
-    await sendLeadMessage(leadDetails.id, finalPayload);
+    await sendLeadMessage(leadDetails.id, finalPayload, sentAt);
     setInputText('');
     
     // Fetch immediately so the user's message shows up in the UI
@@ -1071,6 +1101,12 @@ export default function DMApp() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        
+        {activeClientId && clients.find(c => c.id === activeClientId)?.timezone && (
+          <div className="ml-auto hidden md:flex items-center bg-card border border-border px-3 py-1.5 rounded-md shadow-sm">
+            <LiveTime timezone={clients.find(c => c.id === activeClientId)?.timezone} label="Client Time" />
+          </div>
+        )}
       </div>
 
       <div className="flex-1 flex flex-col lg:flex-row h-full min-h-0 overflow-hidden gap-3">
@@ -1212,7 +1248,7 @@ export default function DMApp() {
                     }
                   }}
                 >
-                  <span className="material-symbols-sharp shrink-0" style={{ color: 'var(--muted)', fontSize: '2.2rem' }}>
+                  <span className="material-symbols-sharp shrink-0 text-muted-foreground" style={{ fontSize: '2.2rem' }}>
                     account_circle
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -1331,12 +1367,11 @@ export default function DMApp() {
                       {leadDetails.fb_link}
                     </a>
                   )}
-                  {leadDetails.timezone && (
-                    <span className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-                      <span className="material-symbols-sharp text-[14px]">schedule</span>
-                      {leadDetails.timezone}
-                    </span>
-                  )}
+                  <div className="flex flex-wrap items-center gap-4 mt-1">
+                    {leadDetails.timezone && (
+                      <LiveTime timezone={leadDetails.timezone} label="Lead" />
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="flex items-center gap-2 ml-auto">
@@ -2402,6 +2437,67 @@ export default function DMApp() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+      {/* Send Message Time Modal */}
+      <Dialog open={showSendTimeModal} onOpenChange={setShowSendTimeModal}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Message Sent At</DialogTitle>
+            <DialogDescription>
+              Specify the exact time this message was sent, so the agent's memory reflects the accurate timeline.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="flex flex-col gap-3">
+              <label className="text-sm font-medium">Date (Local)</label>
+              <div className="border rounded-md mx-auto w-fit bg-background p-1">
+                <Calendar
+                  mode="single"
+                  selected={sendDate}
+                  onSelect={(date) => date && setSendDate(date)}
+                  initialFocus
+                />
+              </div>
+
+              <label className="text-sm font-medium mt-2">Time (Local)</label>
+              <div className="flex gap-2 items-center mx-auto">
+                <Input 
+                  type="number"
+                  min="1"
+                  max="12"
+                  className="w-[70px] text-center"
+                  value={sendHour} 
+                  onChange={e => setSendHour(e.target.value)}
+                />
+                <span className="font-bold">:</span>
+                <Input 
+                  type="number"
+                  min="0"
+                  max="59"
+                  className="w-[70px] text-center"
+                  value={sendMinute} 
+                  onChange={e => {
+                    let v = e.target.value;
+                    if (v.length === 1 && parseInt(v) > 5) v = "0" + v; // QoL formatting
+                    setSendMinute(v);
+                  }}
+                  onBlur={() => setSendMinute(prev => prev.padStart(2, '0'))}
+                />
+                <select 
+                  className="flex h-10 w-[80px] items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ml-2"
+                  value={sendAmPm} onChange={e => setSendAmPm(e.target.value)}
+                >
+                  <option value="AM">AM</option>
+                  <option value="PM">PM</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowSendTimeModal(false)}>Cancel</Button>
+            <Button onClick={confirmSendMessage}>Confirm Send</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

@@ -90,7 +90,7 @@ const google = createGoogleGenerativeAI({
   apiKey: process.env.API_KEY || ''
 });
 
-export async function sendLeadMessage(leadId: string, text: string) {
+export async function sendLeadMessage(leadId: string, text: string, sentAt?: Date) {
   if (!text.trim()) return;
   const leadState = await prisma.leadState.findUnique({ where: { lead_id: leadId } });
   await prisma.conversation.create({
@@ -99,6 +99,7 @@ export async function sendLeadMessage(leadId: string, text: string) {
       role: 'user',
       content: text,
       stage: leadState?.stage || 1,
+      ...(sentAt ? { createdAt: sentAt } : {})
     }
   });
   revalidatePath('/');
@@ -120,8 +121,9 @@ export async function getGlobalClient() {
 
 export async function getClients() {
   const clients = await prisma.client.findMany({
+    where: { isActive: true },
     orderBy: { createdAt: 'asc' },
-    include: { Product: true }
+    include: { Product: { where: { isActive: true } } }
   });
   return clients;
 }
@@ -269,8 +271,9 @@ ${leadState?.leadSummary || 'No long term memory recorded yet.'}
 Assessment Data Captured So Far:
 ${JSON.stringify(leadState?.assessmentData || {}, null, 2)}
 
-${client?.vps || client?.persona ? `CLIENT PROFILE (The business owner you are speaking for):
+${client?.vps || client?.persona || client?.timezone ? `CLIENT PROFILE (The business owner you are speaking for):
 Client Name: ${client.name}
+Timezone: ${client.timezone || 'Not set'}
 Value Proposition (VPS): ${client.vps || 'None provided'}
 Target Persona: ${client.persona || 'None provided'}
 ` : ''}
@@ -819,6 +822,8 @@ export async function syncVipscaleClients() {
     const clients = data.clients || [];
     
     let syncedCount = 0;
+    const activeClientIds = new Set<string>();
+    const activeProductIds = new Set<string>();
     for (const item of clients) {
       const clientName = item.name || item.client || "Unknown Client";
       
@@ -835,6 +840,7 @@ export async function syncVipscaleClients() {
             vps: item.vps || null,
             persona: item.persona || null,
             timezone: item.timezone || null,
+            isActive: true,
             updatedAt: new Date()
           }
         });
@@ -846,11 +852,13 @@ export async function syncVipscaleClients() {
             vps: item.vps || null,
             persona: item.persona || null,
             timezone: item.timezone || null,
+            isActive: true,
             updatedAt: new Date()
           }
         });
         clientId = newClient.id;
       }
+      activeClientIds.add(clientId);
 
       // Sync Products
       if (item.products && Array.isArray(item.products)) {
@@ -867,9 +875,11 @@ export async function syncVipscaleClients() {
               data: {
                 vps: prod.vps || null,
                 persona: prod.persona || null,
+                isActive: true,
                 updatedAt: new Date()
               }
             });
+            activeProductIds.add(existingProd.id);
           } else {
             await prisma.product.create({
               data: {
@@ -878,9 +888,11 @@ export async function syncVipscaleClients() {
                 product_name: prodName,
                 vps: prod.vps || null,
                 persona: prod.persona || null,
+                isActive: true,
                 updatedAt: new Date()
               }
             });
+            activeProductIds.add(newProd.id);
           }
         }
       }
@@ -888,6 +900,15 @@ export async function syncVipscaleClients() {
       syncedCount++;
     }
     
+    await prisma.client.updateMany({
+      where: { id: { notIn: Array.from(activeClientIds) } },
+      data: { isActive: false }
+    });
+    await prisma.product.updateMany({
+      where: { id: { notIn: Array.from(activeProductIds) } },
+      data: { isActive: false }
+    });
+
     revalidatePath('/');
     return { success: true, count: syncedCount };
     
