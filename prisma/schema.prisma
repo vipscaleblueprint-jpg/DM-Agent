@@ -16,6 +16,7 @@ model Client {
   context     String?
   persona     String?
   vps         String?
+  timezone    String?
   ClientStage ClientStage[]
   Lead        Lead[]
   Product     Product[]

@@ -48,14 +48,7 @@ const RightSidebarContent = ({ activeLeadId, leadDetails, activeStageConfig, han
                   Stage {leadDetails.LeadState.stage}: {leadDetails.LeadState.stageName}
                 </span>
               </div>
-              <div className="flex justify-between mb-2 text-sm">
-                <span className="text-muted-foreground">Primary Intent</span>
-                <span className="font-medium text-right max-w-[60%]">{leadDetails.LeadState.primary_intent_id || 'UNKNOWN'}</span>
-              </div>
-              <div className="flex justify-between mb-2 text-sm">
-                <span className="text-muted-foreground">Connection</span>
-                <span className="font-medium text-right max-w-[60%]">{leadDetails.LeadState.connectionLevel}</span>
-              </div>
+
               <div className="flex justify-between mb-2 text-sm">
                 <span className="text-muted-foreground">Lead Status</span>
                 <span className={`font-medium text-right max-w-[60%] ${leadDetails.LeadState.leadStatus === 'HOT' ? 'text-red-500' : leadDetails.LeadState.leadStatus === 'NOT_QUALIFIED' ? 'text-zinc-400' : ''}`}>
@@ -1338,6 +1331,12 @@ export default function DMApp() {
                       {leadDetails.fb_link}
                     </a>
                   )}
+                  {leadDetails.timezone && (
+                    <span className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+                      <span className="material-symbols-sharp text-[14px]">schedule</span>
+                      {leadDetails.timezone}
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-2 ml-auto">
@@ -1473,8 +1472,8 @@ export default function DMApp() {
                               {formattedDividerDate}
                               <span className="material-symbols-sharp text-[0.9rem] opacity-70">expand_more</span>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="center" className="w-56 bg-zinc-900 border-zinc-800 text-zinc-100 p-1">
-                            <div className="px-2 py-1.5 text-xs text-zinc-400 font-medium">Jump to...</div>
+                          <DropdownMenuContent align="center" className="w-56 bg-popover border-border text-popover-foreground p-1">
+                            <div className="px-2 py-1.5 text-xs text-muted-foreground font-medium">Jump to...</div>
                             <DropdownMenuItem className="focus:bg-primary focus:text-primary-foreground cursor-pointer text-sm" onClick={() => {
                                const ts = new Date(new Date().toDateString()).getTime();
                                const div = Array.from(document.querySelectorAll('[id^="date-divider-"]')).reverse().find(d => parseInt(d.id.replace('date-divider-', '')) <= ts);
@@ -1503,7 +1502,7 @@ export default function DMApp() {
                               const firstMsg = document.querySelector('[id^="date-divider-"]');
                               if (firstMsg) firstMsg.scrollIntoView({ behavior: 'smooth', block: 'center' });
                             }}>The very beginning</DropdownMenuItem>
-                            <DropdownMenuSeparator className="bg-zinc-800" />
+                            <DropdownMenuSeparator className="bg-border" />
                             <DropdownMenuItem className="focus:bg-primary focus:text-primary-foreground cursor-pointer text-sm" onClick={() => toast.info("Specific date jumping not yet implemented.")}>Jump to a specific date</DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>

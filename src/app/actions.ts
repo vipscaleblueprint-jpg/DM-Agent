@@ -262,6 +262,7 @@ Current Time: ${simulatedTime || new Date().toISOString()}
 
 Current Lead Profile:
 First Name (Use this if greeting): ${lead?.name ? lead.name.split(' ')[0] : 'Unknown'}
+Timezone: ${lead?.timezone}
 Stage: ${stage} (${stageName})
 Long Term Memory (Summary & Context):
 ${leadState?.leadSummary || 'No long term memory recorded yet.'}
@@ -495,7 +496,7 @@ export async function addLead(name: string, fbLink?: string, clientId?: string, 
         fb_link: fbLink || null,
         client_id: targetClientId,
         product_id: productId || null,
-        timezone: timezone || null,
+        timezone: timezone || (await prisma.client.findUnique({ where: { id: targetClientId } }))?.timezone || 'Asia/Manila',
       updatedAt: new Date(),
       LeadState: {
         create: {
@@ -833,6 +834,7 @@ export async function syncVipscaleClients() {
           data: {
             vps: item.vps || null,
             persona: item.persona || null,
+            timezone: item.timezone || null,
             updatedAt: new Date()
           }
         });
@@ -843,6 +845,7 @@ export async function syncVipscaleClients() {
             name: clientName,
             vps: item.vps || null,
             persona: item.persona || null,
+            timezone: item.timezone || null,
             updatedAt: new Date()
           }
         });

@@ -46,6 +46,7 @@ import {
   PanelLeftClose,
 } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
+import { useTheme } from 'next-themes';
 
 const VIPSCALE_BASE = 'https://tools.vipscaleph.com';
 
@@ -148,7 +149,7 @@ interface SidebarProps {
 // ─── UI Helpers ───────────────────────────────────────────────────────────────
 
 const ROW_BASE =
-  'flex items-center overflow-hidden rounded-md outline-none transition-colors hover:bg-[hsl(240,3.7%,15.9%)] hover:text-[hsl(240,4.8%,95.9%)] text-[hsl(240,4.8%,95.9%)]';
+  'flex items-center overflow-hidden rounded-md outline-none transition-colors hover:bg-accent hover:text-foreground text-foreground';
 
 function VipRow({
   icon: Icon,
@@ -177,12 +178,12 @@ function VipRow({
         {!collapsed && <span className={`flex-1 truncate ${labelClass ?? ''}`}>{label}</span>}
         {!collapsed && (
           <ChevronRight
-            className={`ml-auto size-4 shrink-0 text-[hsl(240,5.3%,26.1%)] transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
+            className={`ml-auto size-4 shrink-0 text-muted-foreground transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
           />
         )}
       </button>
       {open && !collapsed && (
-        <ul className="ml-4 border-l border-[hsl(240,3.7%,15.9%)] pl-2 mt-0.5 space-y-px">
+        <ul className="ml-4 border-l border-border pl-2 mt-0.5 space-y-px">
           {children}
         </ul>
       )}
@@ -207,7 +208,7 @@ function VipItem({
         href={`${VIPSCALE_BASE}${url}`}
         target="_blank"
         rel="noopener noreferrer"
-        className="flex items-center gap-2 overflow-hidden rounded-md px-2 py-1.5 text-sm text-[hsl(240,4.8%,95.9%)] outline-none transition-colors hover:bg-[hsl(240,3.7%,15.9%)]"
+        className="flex items-center gap-2 overflow-hidden rounded-md px-2 py-1.5 text-sm text-foreground outline-none transition-colors hover:bg-accent"
       >
         <Icon className={`size-4 shrink-0 ${iconClass}`} />
         <span className="truncate">{title}</span>
@@ -219,7 +220,7 @@ function VipItem({
 function GroupLabel({ children, collapsed }: { children: React.ReactNode; collapsed: boolean }) {
   if (collapsed) return null;
   return (
-    <div className="flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium text-[hsl(0,0%,63.9%)]">
+    <div className="flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium text-muted-foreground">
       {children}
     </div>
   );
@@ -228,7 +229,7 @@ function GroupLabel({ children, collapsed }: { children: React.ReactNode; collap
 // ─── Main Sidebar Component ───────────────────────────────────────────────────
 
 export function Sidebar({ collapsed, setCollapsed }: SidebarProps) {
-  const { theme, setTheme } = useAppStore();
+  const { theme, setTheme } = useTheme();
 
   const handleSignOut = () => {
     window.location.href = '/auth/login';
@@ -237,7 +238,7 @@ export function Sidebar({ collapsed, setCollapsed }: SidebarProps) {
   const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
 
   const btnClass = (c: boolean) =>
-    `flex items-center overflow-hidden rounded-md outline-none transition-colors hover:bg-[hsl(240,3.7%,15.9%)] text-[hsl(240,4.8%,95.9%)] ${c ? 'justify-center size-8 p-0 w-full mx-auto' : 'w-full gap-2 p-2 text-sm'}`;
+    `flex items-center overflow-hidden rounded-md outline-none transition-colors hover:bg-accent text-foreground ${c ? 'justify-center size-8 p-0 w-full mx-auto' : 'w-full gap-2 p-2 text-sm'}`;
 
   return (
     <div className="flex h-full min-h-0 shrink-0 z-20">
@@ -245,10 +246,10 @@ export function Sidebar({ collapsed, setCollapsed }: SidebarProps) {
         className="relative h-full min-h-0 flex flex-col transition-all duration-300 ease-in-out"
         style={{ width: collapsed ? '3.5rem' : '16rem' }}
       >
-        <div className="h-full min-h-0 w-full bg-[hsl(240,5.9%,10%)] border-r border-[hsl(240,3.7%,15.9%)] flex flex-col text-[hsl(240,4.8%,95.9%)] overflow-hidden">
+        <div className="h-full min-h-0 w-full bg-card border-r border-border flex flex-col text-foreground overflow-hidden">
 
           {/* ── Header: VIPScale logo → external link ── */}
-          <div className="flex h-[60px] items-center px-3 shrink-0 border-b border-[hsl(240,3.7%,15.9%)]">
+          <div className="flex h-[60px] items-center px-3 shrink-0 border-b border-border">
             <a
               href="https://tools.vipscaleph.com/protected"
               target="_blank"
@@ -404,7 +405,7 @@ export function Sidebar({ collapsed, setCollapsed }: SidebarProps) {
               {!collapsed && <span>Sign Out</span>}
             </button>
 
-            <div className="h-px bg-[hsl(240,3.7%,15.9%)] w-full my-2"></div>
+            <div className="h-px bg-border w-full my-2"></div>
 
             {/* Sidebar Expand/Collapse Toggle */}
             <button
