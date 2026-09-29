@@ -197,7 +197,7 @@ export default function DMApp() {
   const [funnelStages, setFunnelStages] = useState<any[]>([]);
   const [deleteMsgId, setDeleteMsgId] = useState<string | null>(null);
   const [isDeletingMsg, setIsDeletingMsg] = useState(false);
-  const [timelineStage, setTimelineStage] = useState<number | 'all'>('all');
+  const [timelineStage, setTimelineStage] = useState<number>(1);
   const [activeChatStage, setActiveChatStage] = useState<number | 'all'>('all');
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
   const [editingMsgContent, setEditingMsgContent] = useState('');
@@ -268,7 +268,15 @@ export default function DMApp() {
         return;
       }
       const data = await getLeads(targetClient, targetProduct || undefined);
-      setLeads(JSON.parse(JSON.stringify(data)));
+      const parsedData = JSON.parse(JSON.stringify(data));
+      const mappedData = parsedData.map((lead: any) => {
+        const last = lead.Conversation?.[0];
+        const lastMessage = last
+          ? { role: last.role, content: String(last.content).replace(/\s+/g, ' ').trim().slice(0, 140), createdAt: last.createdAt }
+          : null;
+        return { ...lead, lastMessage };
+      });
+      setLeads(mappedData);
     } catch (err) {
       console.error(err);
     } finally {
@@ -866,7 +874,7 @@ export default function DMApp() {
   }, [editMemoryConversations]);
 
   const timelineMessages = useMemo(
-    () => timelineStage === 'all' ? editMemoryConversations : editMemoryConversations.filter((m: any) => m.stage === timelineStage),
+    () => editMemoryConversations.filter((m: any) => m.stage === timelineStage),
     [editMemoryConversations, timelineStage]
   );
 
@@ -1259,7 +1267,7 @@ export default function DMApp() {
                         <DropdownMenuItem onClick={async (e) => {
                           e.stopPropagation();
                           setEditMemoryLeadId(lead.id);
-                          setTimelineStage('all');
+                          setTimelineStage(1);
                           setEditMemoryText(lead.LeadState?.leadSummary || '');
                           setEditMemoryStage(lead.LeadState?.stage || 1);
                           setEditMemoryConnection(lead.LeadState?.connectionLevel || 'LOW');
@@ -1361,7 +1369,7 @@ export default function DMApp() {
                     title="Edit Long Term Memory"
                     onClick={async () => {
                       setEditMemoryLeadId(leadDetails.id);
-                      setTimelineStage('all');
+                      setTimelineStage(1);
                       setEditMemoryText(leadDetails.LeadState?.leadSummary || '');
                       setEditMemoryStage(leadDetails.LeadState?.stage || 1);
                       setEditMemoryConnection(leadDetails.LeadState?.connectionLevel || 'LOW');
@@ -1418,10 +1426,11 @@ export default function DMApp() {
               </Sheet>
             </header>
             
-            {/* Stage Tabs */}
-            {chatStages.length > 1 && (
-              <div className="shrink-0 flex items-center gap-2 px-6 py-2 border-b border-border bg-card overflow-x-auto [scrollbar-width:none]">
-                {(['all', ...chatStages] as (number | 'all')[]).map(tab => (
+            {/* Chat Sub-header */}
+            <div className="shrink-0 flex items-center justify-between px-6 py-2 border-b border-border bg-card">
+              <div className="flex items-center gap-2 overflow-x-auto [scrollbar-width:none]">
+              {chatStages.length > 1 && (
+                (['all', ...chatStages] as (number | 'all')[]).map(tab => (
                   <button
                     key={tab}
                     onClick={() => setActiveChatStage(tab)}
@@ -1430,32 +1439,94 @@ export default function DMApp() {
                     {tab === 'all' ? 'All' : stageLabel(tab)}
                     {tab === leadDetails?.LeadState?.stage ? ' •' : ''}
                   </button>
-                ))}
+                ))
+              )}
               </div>
-            )}
+              
+            </div>
 
             {/* Scrollable Message History */}
-            <div className="flex-1 overflow-y-auto min-h-0 p-6 flex flex-col gap-6 bg-background">
+            <div className="flex-1 overflow-y-scroll min-h-0 p-6 flex flex-col gap-6 bg-background">
+
               {(!leadDetails.Conversation || leadDetails.Conversation.length === 0) ? (
                 <div className="m-auto text-muted-foreground text-center flex flex-col items-center gap-2">
                   <span className="material-symbols-sharp text-4xl opacity-50">chat_bubble</span>
                   <p>No messages yet. Send a message to start the funnel.</p>
                 </div>
               ) : (
-                visibleMessages.map((msg: any) => (
-                  <div key={msg.id.toString()} className={`flex flex-col max-w-[90%] md:max-w-[75%] ${msg.role === 'user' ? 'self-end items-end' : 'self-start items-start'}`}>
+                visibleMessages.map((msg: any, index: number) => {
+                  const currentMsgDate = msg.createdAt ? new Date(msg.createdAt).toDateString() : null;
+                  const prevMsgDate = index > 0 && visibleMessages[index - 1].createdAt ? new Date(visibleMessages[index - 1].createdAt).toDateString() : null;
+                  const showDateDivider = currentMsgDate && currentMsgDate !== prevMsgDate;
+                  const formattedDividerDate = msg.createdAt ? new Date(msg.createdAt).toLocaleString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) : '';
+                  const dividerId = currentMsgDate ? `date-divider-${new Date(currentMsgDate).getTime()}` : '';
+                  
+                  return (
+                  <React.Fragment key={msg.id.toString()}>
+                    {showDateDivider && (
+                      <div id={dividerId} className="flex items-center justify-center my-4 relative">
+                        <div className="absolute inset-0 flex items-center">
+                          <div className="w-full border-t border-border"></div>
+                        </div>
+                        <DropdownMenu modal={false}>
+                          <DropdownMenuTrigger className="relative bg-background px-4 text-xs font-medium text-muted-foreground rounded-full border border-border py-1 shadow-sm hover:bg-surface-hover hover:text-foreground transition-colors cursor-pointer flex items-center gap-1 focus:outline-none">
+                              {formattedDividerDate}
+                              <span className="material-symbols-sharp text-[0.9rem] opacity-70">expand_more</span>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="center" className="w-56 bg-zinc-900 border-zinc-800 text-zinc-100 p-1">
+                            <div className="px-2 py-1.5 text-xs text-zinc-400 font-medium">Jump to...</div>
+                            <DropdownMenuItem className="focus:bg-primary focus:text-primary-foreground cursor-pointer text-sm" onClick={() => {
+                               const ts = new Date(new Date().toDateString()).getTime();
+                               const div = Array.from(document.querySelectorAll('[id^="date-divider-"]')).reverse().find(d => parseInt(d.id.replace('date-divider-', '')) <= ts);
+                               if (div) div.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                               else toast.info("No messages found.");
+                            }}>Today</DropdownMenuItem>
+                            <DropdownMenuItem className="focus:bg-primary focus:text-primary-foreground cursor-pointer text-sm" onClick={() => {
+                               const ts = new Date(new Date(Date.now() - 86400000).toDateString()).getTime();
+                               const div = Array.from(document.querySelectorAll('[id^="date-divider-"]')).reverse().find(d => parseInt(d.id.replace('date-divider-', '')) <= ts);
+                               if (div) div.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                               else toast.info("No messages found.");
+                            }}>Yesterday</DropdownMenuItem>
+                            <DropdownMenuItem className="focus:bg-primary focus:text-primary-foreground cursor-pointer text-sm" onClick={() => {
+                               const ts = new Date(new Date(Date.now() - 7 * 86400000).toDateString()).getTime();
+                               const div = Array.from(document.querySelectorAll('[id^="date-divider-"]')).reverse().find(d => parseInt(d.id.replace('date-divider-', '')) <= ts);
+                               if (div) div.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                               else toast.info("No messages found.");
+                            }}>Last week</DropdownMenuItem>
+                            <DropdownMenuItem className="focus:bg-primary focus:text-primary-foreground cursor-pointer text-sm" onClick={() => {
+                               const ts = new Date(new Date(Date.now() - 30 * 86400000).toDateString()).getTime();
+                               const div = Array.from(document.querySelectorAll('[id^="date-divider-"]')).reverse().find(d => parseInt(d.id.replace('date-divider-', '')) <= ts);
+                               if (div) div.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                               else toast.info("No messages found.");
+                            }}>Last month</DropdownMenuItem>
+                            <DropdownMenuItem className="focus:bg-primary focus:text-primary-foreground cursor-pointer text-sm" onClick={() => {
+                              const firstMsg = document.querySelector('[id^="date-divider-"]');
+                              if (firstMsg) firstMsg.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }}>The very beginning</DropdownMenuItem>
+                            <DropdownMenuSeparator className="bg-zinc-800" />
+                            <DropdownMenuItem className="focus:bg-primary focus:text-primary-foreground cursor-pointer text-sm" onClick={() => toast.info("Specific date jumping not yet implemented.")}>Jump to a specific date</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    )}
+                  <div className={`flex flex-col max-w-[90%] md:max-w-[75%] ${msg.role === 'user' ? 'self-end items-end' : 'self-start items-start'}`}>
                     
                     {/* Header */}
                     <div className={`flex items-center gap-3 mb-1.5 px-2 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-                         {msg.role === 'user' ? 'Lead' : 'AI Draft'}
+                         {msg.role === 'user' ? (leadDetails?.name || 'Lead') : (leadDetails?.Client?.name || 'AI Draft')}
                        </span>
-                       <span 
-                         className="text-[10px] text-muted-foreground/70 cursor-default"
-                         title={msg.createdAt ? new Date(msg.createdAt).toLocaleString() : ''}
-                       >
-                         {msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''}
-                       </span>
+                       <div className="relative group flex items-center">
+                         <span 
+                           className="text-[10px] text-muted-foreground/70 cursor-pointer"
+                         >
+                           {msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''}
+                         </span>
+                         <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:block whitespace-nowrap bg-zinc-800 text-zinc-100 text-[10px] py-1 px-2 rounded shadow-lg z-50">
+                           {msg.createdAt ? new Date(msg.createdAt).toLocaleString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : ''}
+                           <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-zinc-800"></div>
+                         </div>
+                       </div>
                        <div className={`flex gap-2 items-center ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
                           <button onClick={() => { navigator.clipboard.writeText(msg.content); toast.success('Copied!'); }} className="text-muted-foreground hover:text-foreground transition-colors" title="Copy">
                             <span className="material-symbols-sharp" style={{fontSize: '1rem'}}>content_copy</span>
@@ -1510,14 +1581,16 @@ export default function DMApp() {
                       )}
                     </div>
                   </div>
-                ))
+                  </React.Fragment>
+                );
+                })
               )}
               {isLoading && (
                 <div className="flex flex-col self-start max-w-[90%] md:max-w-[75%] items-start">
                    {/* Header */}
                    <div className="flex items-center gap-3 mb-1.5 px-2 flex-row">
                       <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-                        AI Draft
+                        {leadDetails?.Client?.name || 'AI Draft'}
                       </span>
                    </div>
                    
@@ -1714,11 +1787,10 @@ export default function DMApp() {
               </div>
             ) : (
               <div className="space-y-2 max-h-[65vh] overflow-y-auto pr-2 custom-scrollbar">
-                {timelineStages.length > 1 && (
-                  <div className="sticky top-0 z-20 flex items-center gap-2 py-2 bg-card overflow-x-auto [scrollbar-width:none]">
-                    {(['all', ...timelineStages] as (number | 'all')[]).map(tab => (
-                      <button
-                        key={tab}
+                <div className="sticky top-0 z-20 flex items-center gap-2 py-2 bg-card overflow-x-auto [scrollbar-width:none]">
+                  {timelineStages.map(tab => (
+                    <button
+                      key={tab}
                         onClick={() => setTimelineStage(tab)}
                         className={`px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${timelineStage === tab ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'}`}
                       >
@@ -1726,7 +1798,7 @@ export default function DMApp() {
                       </button>
                     ))}
                   </div>
-                )}
+
 
                 {/* Insert at top */}
                 <div className="flex justify-center py-1 opacity-0 hover:opacity-100 transition-opacity z-10 relative">
@@ -1752,11 +1824,11 @@ export default function DMApp() {
                         
                         return (
                           <div
-                            className={`flex items-start gap-3 p-3 rounded-md border shadow-sm group transition-colors ${editingMsgId === msg.id.toString() ? 'bg-primary/5 border-primary/30' : 'bg-card border-border hover:border-primary/20 hover:bg-card/80'}`}
+                            className={`flex flex-col items-start gap-1.5 p-3 rounded-md border shadow-sm group transition-colors ${editingMsgId === msg.id.toString() ? 'bg-primary/5 border-primary/30' : 'bg-card border-border hover:border-primary/20 hover:bg-card/80'}`}
                           >
                             <DropdownMenu>
                               <DropdownMenuTrigger className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0 mt-0.5 tracking-wider cursor-pointer hover:opacity-80 transition-opacity outline-none ${msg.role === 'user' ? 'bg-primary/20 text-primary' : 'bg-muted text-muted-foreground'}`} title="Change role">
-                                {msg.role === 'user' ? 'Lead' : 'AI'}
+                                {msg.role === 'user' ? (leads.find((l:any) => l.id === editMemoryLeadId)?.name || 'Lead') : (clients.find((c:any) => c.id === activeClientId)?.name || 'AI')}
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="start">
                                 {(['assistant', 'user'] as const).map(r => (
@@ -1770,12 +1842,12 @@ export default function DMApp() {
                                       setLeadDetails(JSON.parse(JSON.stringify(activeData)));
                                     }
                                   }}>
-                                    {r === 'user' ? 'Lead (user)' : 'AI (assistant)'}
+                                    {r === 'user' ? `${leads.find((l:any) => l.id === editMemoryLeadId)?.name || 'Lead'} (user)` : `${clients.find((c:any) => c.id === activeClientId)?.name || 'AI'} (assistant)`}
                                   </DropdownMenuItem>
                                 ))}
                               </DropdownMenuContent>
                             </DropdownMenu>
-                            <div className="text-sm flex-1 flex flex-col group/msg">
+                            <div className="text-sm w-full flex flex-col group/msg">
                               <Textarea 
                                 value={msg.content} 
                                 onChange={e => {
