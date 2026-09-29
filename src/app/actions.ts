@@ -311,7 +311,7 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
   const assetUrls = client?.context ? Array.from(client.context.matchAll(/https:\/\/[^\s]+/g)).map(m => m[0]) : [];
   const promptParts: any[] = [{ type: 'text', text: `Chat History:\n${chatHistoryStr}` }];
   if (options?.followUpNumber) {
-    promptParts.push({ type: 'text', text: `\n[SYSTEM]: This is Follow-up #${options.followUpNumber}. The lead has not responded for a while. Please generate an appropriate follow-up message based on the context.` }});
+    promptParts.push({ type: 'text', text: `\n[SYSTEM]: This is Follow-up #${options.followUpNumber}. The lead has not responded for a while. Please generate an appropriate follow-up message based on the context.` });
   }
   
   for (const url of assetUrls) {
