@@ -245,7 +245,7 @@ async function buildDraftContext(leadId: string, clientId: string, simulatedTime
     .join('\n\n');
 
   if (conversations.length > 0 && conversations[conversations.length - 1].role === 'assistant') {
-    chatHistoryStr += `\n\n[SYSTEM NOTE]: The lead has NOT responded to your last message. The current time is now ${simulatedTime || new Date().toISOString()}. Follow the guidelines for unanswered messages.`;
+    chatHistoryStr += `\n\n[SYSTEM NOTE]: The lead has NOT responded to your last message. The current time is now ${simulatedTime || new Date().toISOString()}. Follow the guidelines for unanswer[...]
   }
   // 3. Define the LLM instruction and schema
   const stage = leadState?.stage || 1;
@@ -258,7 +258,7 @@ GLOBAL FORMATTING INSTRUCTION:
 NEVER use em dashes (—) or hyphens (-) as punctuation to break up sentences. Always use commas, periods, or start a new sentence instead to keep the tone natural and conversational.
 
 CRITICAL INSTRUCTION FOR MANUAL ROLLBACKS:
-You are currently in Stage ${stage}. If the chat history shows that you have previously taken actions or sent messages that belong to a later stage (for example, pitching a product when you should currently be building curiosity), IGNORE THOSE PAST MESSAGES. The user has manually overridden your memory state to force you back to Stage ${stage}. You must strictly follow the Stage ${stage} objective above, as if the future actions in the chat history never happened. Do not apologize or awkwardly try to restart a conversation; just smoothly pick up the conversation from the current context while strictly adhering to your Stage ${stage} objective.
+You are currently in Stage ${stage}. If the chat history shows that you have previously taken actions or sent messages that belong to a later stage (for example, pitching a product when you shoul[...]
 
 Current Time: ${simulatedTime || new Date().toISOString()}
 
@@ -277,7 +277,7 @@ Timezone: ${client.timezone || 'Not set'}
 Value Proposition (VPS): ${client.vps || 'None provided'}
 Target Persona: ${client.persona || 'None provided'}
 ` : ''}
-${product ? `PRODUCT CONTEXT (Keep this specific product in mind while responding):\nProduct Name: ${product.product_name}\nValue Proposition (VPS): ${product.vps || 'None provided'}\nTarget Persona: ${product.persona || 'None provided'}\n` : ''}
+${product ? `PRODUCT CONTEXT (Keep this specific product in mind while responding):\nProduct Name: ${product.product_name}\nValue Proposition (VPS): ${product.vps || 'None provided'}\nTarget Pers[...]
 ${client?.context?.trim() ? `GLOBAL CLIENT CONTEXT (Knowledge base and learned rules for this client. Follow it.):\n${client.context.trim()}\n` : ''}
 
 Output JSON according to the schema.
@@ -306,7 +306,7 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
   const assetUrls = client?.context ? Array.from(client.context.matchAll(/https:\/\/[^\s]+/g)).map(m => m[0]) : [];
   const promptParts: any[] = [{ type: 'text', text: `Chat History:\n${chatHistoryStr}` }];
   if (options?.followUpNumber) {
-    promptParts.push({ type: 'text', text: `\n[SYSTEM]: This is Follow-up #${options.followUpNumber}. The lead has not responded for a while. Please generate an appropriate follow-up message based on the rules.` });
+    promptParts.push({ type: 'text', text: `\n[SYSTEM]: This is Follow-up #${options.followUpNumber}. The lead has not responded for a while. Please generate an appropriate follow-up message base[...]
   }
   
   for (const url of assetUrls) {
@@ -337,13 +337,13 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
         drafted_response: z.string().describe('The natural DM response to send to the lead'),
         stage: z.number().describe('The current stage number'),
         stage_name: z.string().describe('Name of the stage'),
-        // primary_intent: z.enum(['wealth', 'time_freedom', 'additional_income', 'career_change', 'identity', 'ownership', 'fulfillment', 'clarity', 'legacy', 'other', 'unknown']).optional().describe('The primary intent identified'),
+        // primary_intent: z.enum(['wealth', 'time_freedom', 'additional_income', 'career_change', 'identity', 'ownership', 'fulfillment', 'clarity', 'legacy', 'other', 'unknown']).optional().des[...]
         // connection_level: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional().describe('Connection level built so far'),
         stage_ready_for_promotion: z.boolean().describe('Are they ready to advance to the next stage based on exit conditions?'),
         reason: z.string().describe('Brief explanation for stage promotion decision'),
         next_stage: z.number().describe('The stage they should be in next'),
         summary: z.string().optional().describe('Brief summary of what we know about the lead so far'),
-        assessment_updates: z.record(z.string(), z.any()).describe('A dictionary updating any dynamic checklist keys for this stage. Key is the checklist item ID, value is the updated value (e.g. boolean, string).'),
+        assessment_updates: z.record(z.string(), z.any()).describe('A dictionary updating any dynamic checklist keys for this stage. Key is the checklist item ID, value is the updated value (e.g.[...]
         latest_message_sender: z.enum(['ME', 'LEAD']).optional().describe('Who sent the latest message'),
         lead_status: z.enum(['HOT', 'NOT_HOT', 'NOT_QUALIFIED']).optional().describe('Lead status assessment based on instructions'),
         stage_exit_criteria_met: z.boolean().optional().describe('Whether all Stage 1 exit criteria are met'),
@@ -881,7 +881,7 @@ export async function syncVipscaleClients() {
             });
             activeProductIds.add(existingProd.id);
           } else {
-            await prisma.product.create({
+            const newProd = await prisma.product.create({
               data: {
                 id: `prod_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                 client_id: clientId,
@@ -997,7 +997,7 @@ export async function addProductBothDbs(clientId: string, productName: string, p
 
     // Save to VIPScale DB via Supabase
     const supabaseUrl = 'https://qiavwjheyschrfeaqply.supabase.co';
-    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpYXZ3amhleXNjaHJmZWFxcGx5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NzE3MzA3NCwiZXhwIjoyMDgyNzQ5MDc0fQ.6pFhthGxzoEbZaoyAb8pc8EhomXXm3AH1l0F2KXsIoc';
+    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpYXZ3amhleXNjaHJmZWFxcGx5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NzE3MzA3NCwiZXhwIjoyMDgyNzQ5[...]
     
     const payload = {
       client_id: vipscaleClientId,
@@ -1037,4 +1037,3 @@ export async function setLeadQualification(leadId: string, isNotQualified: boole
   });
   revalidatePath('/');
 }
-
