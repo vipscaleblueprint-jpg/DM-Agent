@@ -15,8 +15,8 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Called by n8n with a bearer secret (checked inside the route), so no SSO cookie
-  if (request.nextUrl.pathname === "/api/auto-draft-followups") {
+  // Called by n8n / GHL with a secret (checked inside the route), so no SSO cookie
+  if (request.nextUrl.pathname === "/api/auto-draft-followups" || request.nextUrl.pathname === "/api/ghl/inbound") {
     return NextResponse.next();
   }
 

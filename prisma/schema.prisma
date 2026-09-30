@@ -18,6 +18,10 @@ model Client {
   vps         String?
   timezone    String?
   isActive    Boolean       @default(true)
+  // GoHighLevel sub-account for this client (Meta DMs come in through GHL)
+  ghlLocationId String?     @unique
+  ghlToken      String?     // Private Integration token for that sub-account
+  ghlAutoReply  Boolean     @default(false) // false = AI replies are saved as drafts only
   ClientStage ClientStage[]
   Lead        Lead[]
   Product     Product[]
@@ -59,6 +63,7 @@ model Conversation {
   createdAt DateTime    @default(now())
   stage     Int?
   autoDraft Boolean     @default(false)
+  ghlMessageId String?  @unique // set for messages synced from / sent through GHL
   Lead      Lead        @relation(fields: [lead_id], references: [id])
 }
 
@@ -78,6 +83,9 @@ model Lead {
   name            String            @default("Unknown Lead")
   product_id      String?
   timezone        String?
+  ghlContactId    String?           @unique
+  ghlChannel      String?           // "IG" | "FB", the GHL message type used to reply
+  ghlConversationId String?
   Conversation    Conversation[]
   Client          Client            @relation(fields: [client_id], references: [id])
   Product         Product?          @relation(fields: [product_id], references: [id])

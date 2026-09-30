@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { generateDraftResponse } from '@/app/actions';
 import { getFollowUpStatus, isValidTimezone, defaultFollowUpTimezone } from '@/lib/followup';
+import { syncGhlConversation } from '@/lib/ghl-sync';
 
 // Drafting calls the LLM once per lead, so a single run is capped. Leads left over are picked up on the next run.
 export const DEFAULT_LIMIT = 10;
@@ -23,6 +24,7 @@ export async function runAutoDraftFollowUps({ limit = DEFAULT_LIMIT, dryRun = fa
       name: true,
       client_id: true,
       timezone: true,
+      ghlContactId: true,
       Conversation: {
         where: { NOT: { content: { startsWith: '[[STAGE_MARKER:' } } },
         orderBy: { createdAt: 'desc' },
@@ -47,7 +49,27 @@ export async function runAutoDraftFollowUps({ limit = DEFAULT_LIMIT, dryRun = fa
 
   if (!dryRun) {
     // Sequential on purpose: keeps LLM rate limits and DB load predictable
-    for (const { lead, status } of batch) {
+    for (const { lead, status: storedStatus } of batch) {
+      let status = storedStatus;
+      // Someone may have replied in GHL (or the lead may have written) since we last synced
+      if (lead.ghlContactId) {
+        try {
+          const { added } = await syncGhlConversation(lead.id);
+          if (added > 0) {
+            const fresh = await prisma.conversation.findMany({
+              where: { lead_id: lead.id, NOT: { content: { startsWith: '[[STAGE_MARKER:' } } },
+              orderBy: { createdAt: 'desc' },
+              select: { role: true, createdAt: true },
+            });
+            const tz = isValidTimezone(lead.timezone) ? lead.timezone : fallbackTz;
+            const next = getFollowUpStatus(fresh.map(m => ({ role: m.role, createdAt: m.createdAt.toISOString() })), tz);
+            if (!next || next.dueAt > Date.now()) continue; // no longer due
+            status = next;
+          }
+        } catch (err) {
+          console.error('[auto-draft] GHL sync failed, drafting with stored history', lead.id, err);
+        }
+      }
       const res = await generateDraftResponse(lead.id, lead.client_id, undefined, { followUpNumber: status.followUpNumber });
       if (res.success) drafted.push({ leadId: lead.id, name: lead.name, followUpNumber: status.followUpNumber });
       else failed.push({ leadId: lead.id, name: lead.name, error: res.error || 'Unknown error' });

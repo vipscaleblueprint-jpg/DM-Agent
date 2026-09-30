@@ -59,12 +59,25 @@ export async function getLeadDetails(leadId: string) {
 
   if (lead) {
     lead.Conversation = withEffectiveStages(lead.Conversation);
+    // Never send the GHL token to the browser
+    lead.Client.ghlToken = null;
   }
 
   // Serialize BigInt safely
   return JSON.parse(JSON.stringify(lead, (key, value) =>
     typeof value === 'bigint' ? value.toString() : value
   ));
+}
+
+// Pulls messages sent/received in GHL that DM Agent hasn't seen yet. No-op for leads not from GHL.
+export async function syncLeadFromGhl(leadId: string) {
+  try {
+    const { syncGhlConversation } = await import('@/lib/ghl-sync');
+    return { success: true, ...(await syncGhlConversation(leadId)) };
+  } catch (err: any) {
+    console.error('GHL sync failed', leadId, err);
+    return { success: false, added: 0, error: err.message };
+  }
 }
 
 export async function addBulkConversation(leadId: string, content: string) {
@@ -125,7 +138,30 @@ export async function getClients() {
     orderBy: { createdAt: 'asc' },
     include: { Product: { where: { isActive: true } } }
   });
-  return clients;
+  // Never send the GHL token to the browser, only whether one is saved
+  return clients.map(({ ghlToken, ...c }) => ({ ...c, ghlConnected: !!ghlToken }));
+}
+
+// Blank token = keep the saved one
+export async function saveGhlSettings(clientId: string, settings: { locationId: string; token?: string; autoReply: boolean }) {
+  try {
+    const locationId = settings.locationId.trim();
+    await prisma.client.update({
+      where: { id: clientId },
+      data: {
+        ghlLocationId: locationId || null,
+        ...(settings.token?.trim() ? { ghlToken: settings.token.trim() } : {}),
+        ...(locationId ? {} : { ghlToken: null }),
+        ghlAutoReply: settings.autoReply,
+        updatedAt: new Date(),
+      }
+    });
+    revalidatePath('/');
+    return { success: true };
+  } catch (err: any) {
+    if (err.code === 'P2002') return { success: false, error: 'That GHL Location ID is already linked to another client' };
+    return { success: false, error: err.message };
+  }
 }
 
 export async function addClient(name: string) {
@@ -385,7 +421,7 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
     });
 
     // 5. Save the generated draft as assistant message so it shows in history
-    await prisma.conversation.create({
+    const saved = await prisma.conversation.create({
       data: {
         lead_id: leadId,
         role: 'assistant',
@@ -395,7 +431,7 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
     });
 
     revalidatePath('/');
-    return { success: true, response: object.drafted_response };
+    return { success: true, response: object.drafted_response, messageId: saved.id };
 
   } catch (error: any) {
     console.error('LLM Error:', error);

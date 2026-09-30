@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { TimezoneSelect } from '@/components/TimezoneSelect';
 import { LiveTime } from '@/components/LiveTime';
 import { getFollowUpStatus, isValidTimezone, browserTimezone } from '@/lib/followup';
-import { setLeadQualification, getLeads, editLeadMemory, editStructuredLeadMemory, insertConversationMessage, setMessageStageFrom, getLeadDetails, generateDraftResponse, addLead, getPresignedUrl, sendLeadMessage, saveClientContext, uploadFileToR2, getGlobalClient, getPromptForStage, getFullSystemPrompt, editLead, removeLead, editConversationMessage, learnFromCorrection, deleteMessage, getClients, addClient, getClientStage, editClient, getClientStages, saveClientStages, syncVipscaleClients } from './actions';
+import { setLeadQualification, getLeads, editLeadMemory, editStructuredLeadMemory, insertConversationMessage, setMessageStageFrom, getLeadDetails, generateDraftResponse, addLead, getPresignedUrl, sendLeadMessage, saveClientContext, uploadFileToR2, getGlobalClient, getPromptForStage, getFullSystemPrompt, editLead, removeLead, editConversationMessage, learnFromCorrection, deleteMessage, getClients, addClient, getClientStage, editClient, getClientStages, saveClientStages, syncVipscaleClients, saveGhlSettings, syncLeadFromGhl } from './actions';
 import { Button } from "@/components/ui/button";
 import Loader from "@/components/ui/loader";
 import { Input } from "@/components/ui/input";
@@ -202,7 +202,10 @@ export default function DMApp() {
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
   const [editingMsgContent, setEditingMsgContent] = useState('');
   
-  const [activeSettingsTab, setActiveSettingsTab] = useState<'knowledge' | 'funnel'>('knowledge');
+  const [activeSettingsTab, setActiveSettingsTab] = useState<'knowledge' | 'funnel' | 'ghl'>('knowledge');
+  const [ghlLocationId, setGhlLocationId] = useState('');
+  const [ghlToken, setGhlToken] = useState('');
+  const [ghlAutoReply, setGhlAutoReply] = useState(false);
   const [clientStagesState, setClientStagesState] = useState<any[]>([]);
   const [activeStageIndex, setActiveStageIndex] = useState(0);
   
@@ -359,6 +362,12 @@ export default function DMApp() {
       setActiveChatStage('all');
       fetchLeadDetails(activeLeadId);
       setInputText('');
+      // Show the stored chat right away, then pull in anything sent directly in GHL
+      let cancelled = false;
+      syncLeadFromGhl(activeLeadId).then(res => {
+        if (!cancelled && res.added > 0) fetchLeadDetails(activeLeadId);
+      });
+      return () => { cancelled = true; };
     }
   }, [activeLeadId]);
 
@@ -584,6 +593,16 @@ export default function DMApp() {
       await saveClientContext(activeClientId, finalContext);
       await initClients(); // refresh clients to update the local state with the new context
       toast.success('Knowledge Base saved.');
+    } else if (activeSettingsTab === 'ghl') {
+      const res = await saveGhlSettings(activeClientId!, { locationId: ghlLocationId, token: ghlToken, autoReply: ghlAutoReply });
+      if (!res.success) {
+        toast.error(res.error || 'Failed to save GoHighLevel settings.');
+        setIsSavingContext(false);
+        return;
+      }
+      await initClients();
+      setGhlToken('');
+      toast.success('GoHighLevel settings saved.');
     } else {
       const parsedStages = clientStagesState.map(s => {
         let config: any[] = [];
@@ -637,6 +656,9 @@ export default function DMApp() {
     setActiveSettingsTab('knowledge');
     try {
       const client = clients.find(c => c.id === activeClientId);
+      setGhlLocationId(client?.ghlLocationId || '');
+      setGhlToken('');
+      setGhlAutoReply(!!client?.ghlAutoReply);
       if (client?.context) {
         const urlRegex = /(https?:\/\/[^\s]+)/g;
         const urls = client.context.match(urlRegex) || [];
@@ -2078,9 +2100,49 @@ export default function DMApp() {
               <span className="material-symbols-sharp text-[1.2rem]">account_tree</span>
               Funnel Stages & Prompts
             </button>
+            <button 
+              className={`pb-3 px-2 border-b-2 font-semibold text-sm transition-colors flex items-center gap-2 ${activeSettingsTab === 'ghl' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+              onClick={() => setActiveSettingsTab('ghl')}
+            >
+              <span className="material-symbols-sharp text-[1.2rem]">forum</span>
+              GoHighLevel
+            </button>
           </div>
 
-          {activeSettingsTab === 'knowledge' ? (
+          {activeSettingsTab === 'ghl' ? (
+            <div className="space-y-5">
+              <p className="text-sm text-muted-foreground">
+                Connect this client's GHL sub-account. Facebook and Instagram DMs that GHL receives are sent here, and the AI's reply is sent back through GHL.
+              </p>
+              <div>
+                <Label htmlFor="ghlLocationId" className="mb-2 block">Location ID</Label>
+                <Input id="ghlLocationId" value={ghlLocationId} onChange={(e) => setGhlLocationId(e.target.value)} placeholder="GHL sub-account Location ID" />
+              </div>
+              <div>
+                <Label htmlFor="ghlToken" className="mb-2 block">Private Integration Token</Label>
+                <Input
+                  id="ghlToken"
+                  type="password"
+                  value={ghlToken}
+                  onChange={(e) => setGhlToken(e.target.value)}
+                  placeholder={clients.find(c => c.id === activeClientId)?.ghlConnected ? 'Saved. Leave blank to keep it' : 'pit-...'}
+                  autoComplete="off"
+                />
+                <p className="text-xs text-muted-foreground mt-1">Needs read and write access to conversations and conversation messages.</p>
+              </div>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <Checkbox checked={ghlAutoReply} onCheckedChange={(v) => setGhlAutoReply(!!v)} className="mt-0.5" />
+                <span className="text-sm">
+                  <span className="font-medium">Send replies automatically</span>
+                  <span className="block text-muted-foreground">When off, replies are only saved here as drafts.</span>
+                </span>
+              </label>
+              <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs space-y-1">
+                <p className="font-semibold">Webhook URL for the GHL workflow</p>
+                <code className="block break-all">{typeof window !== 'undefined' ? window.location.origin : ''}/api/ghl/inbound?secret=YOUR_GHL_WEBHOOK_SECRET</code>
+              </div>
+            </div>
+          ) : activeSettingsTab === 'knowledge' ? (
             <div className="flex flex-col">
               <div className="flex justify-between items-center mb-4">
                 <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Additional Context Files (Optional)</h4>
