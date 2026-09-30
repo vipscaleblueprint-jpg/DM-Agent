@@ -20,8 +20,14 @@ export async function register() {
         distinct: ['timezone'],
         select: { timezone: true },
       });
+      // Leads without a timezone follow their client's
+      const clientRows = await prisma.client.findMany({
+        where: { timezone: { not: null } },
+        distinct: ['timezone'],
+        select: { timezone: true },
+      });
       const zones = new Set<string>([defaultFollowUpTimezone()]);
-      for (const r of rows) if (isValidTimezone(r.timezone)) zones.add(r.timezone);
+      for (const r of [...rows, ...clientRows]) if (isValidTimezone(r.timezone)) zones.add(r.timezone);
 
       const now = Date.now();
       let next = Infinity;

@@ -1,11 +1,8 @@
-// Stub modals – not used in DM Agent context
-export const InviteModal = () => null;
-export const AddInvitationModal = () => null;
-export const CreateSpaceModal = () => null;
-export const CreateFolderModal = () => null;
-export const CreateListModal = () => null;
-export const CreateDocModal = () => null;
-export const CreatePageModal = () => null;
-export const ApiSettingsModal = () => null;
-export const ConfirmDeleteModal = () => null;
-export const RenameModal = () => null;
+export { AddClientModal } from './AddClientModal';
+export { AddProductModal } from './AddProductModal';
+export { ClientSettingsModal } from './ClientSettingsModal';
+export { ConfirmModal, useConfirm, type ConfirmOptions } from './ConfirmModal';
+export { DebugPromptModal } from './DebugPromptModal';
+export { LeadFormModal, type LeadFormValues } from './LeadFormModal';
+export { MessageTimeModal } from './MessageTimeModal';
+export { TimelineEditorModal } from './TimelineEditorModal';

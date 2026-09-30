@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { generateDraftResponse } from '@/app/actions';
 import { toMetaChannel, lookupContactChannel, sendGhlMessage } from '@/lib/ghl';
 import { syncGhlConversation } from '@/lib/ghl-sync';
+import { releaseDoneLock } from '@/lib/lead-status';
 
 // Drafting + sending runs after the response, so give it room
 export const maxDuration = 60;
@@ -61,7 +62,8 @@ export async function POST(request: Request) {
         id: `lead_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         name,
         client_id: client.id,
-        timezone: client.timezone || 'Asia/Manila',
+        // GHL doesn't tell us where the lead is. Left empty (set by hand); follow-ups use the client's timezone meanwhile
+        timezone: null,
         ghlContactId: contactId,
         ghlChannel: channelHint,
         updatedAt: new Date(),
@@ -82,6 +84,7 @@ export async function POST(request: Request) {
   const inbound = await prisma.conversation.create({
     data: { lead_id: lead.id, role: 'user', content, stage: lead.LeadState?.stage || 1 },
   });
+  await releaseDoneLock(lead.id);
 
   if (lead.LeadState?.leadStatus === 'NOT_QUALIFIED') {
     return NextResponse.json({ ok: true, leadId: lead.id, skipped: 'lead is not qualified' });
@@ -126,6 +129,13 @@ async function replyToLead({ leadId, inboundId, contactId, locationId, channelHi
 
   const { ghlToken, ghlAutoReply } = lead.Client;
   if (!ghlAutoReply || !ghlToken) {
+    await markAsDraft();
+    return;
+  }
+
+  // Anything that looks like the lead steered the AI waits for a human (see src/lib/reply-guard.ts)
+  if (draft.holdReason) {
+    console.warn(`[ghl-inbound] reply held as a draft for ${leadId}: ${draft.holdReason}`);
     await markAsDraft();
     return;
   }

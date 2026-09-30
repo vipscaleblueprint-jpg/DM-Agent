@@ -13,17 +13,21 @@ export const MAX_LIMIT = 50;
 export async function runAutoDraftFollowUps({ limit = DEFAULT_LIMIT, dryRun = false }: { limit?: number; dryRun?: boolean } = {}) {
   const cap = Math.min(Math.max(1, limit), MAX_LIMIT);
 
-  // Used for leads with no timezone set
-  const fallbackTz = defaultFollowUpTimezone();
+  // Leads with no timezone use their client's, then this default
+  const defaultTz = defaultFollowUpTimezone();
+
+  const leadTimezone = (lead: { timezone: string | null; Client: { timezone: string | null } }) =>
+    isValidTimezone(lead.timezone) ? lead.timezone : isValidTimezone(lead.Client.timezone) ? lead.Client.timezone : defaultTz;
 
   const leads = await prisma.lead.findMany({
-    // Not-qualified leads are closed out, so no more follow-ups for them
-    where: { LeadState: { is: { leadStatus: { not: 'NOT_QUALIFIED' } } } },
+    // Not-qualified and Done leads are closed out, so no more follow-ups for them
+    where: { LeadState: { is: { leadStatus: { notIn: ['NOT_QUALIFIED', 'DONE'] } } } },
     select: {
       id: true,
       name: true,
       client_id: true,
       timezone: true,
+      Client: { select: { timezone: true } },
       ghlContactId: true,
       Conversation: {
         where: { NOT: { content: { startsWith: '[[STAGE_MARKER:' } } },
@@ -36,7 +40,7 @@ export async function runAutoDraftFollowUps({ limit = DEFAULT_LIMIT, dryRun = fa
   const now = Date.now();
   const due = leads
     .map(lead => {
-      const tz = isValidTimezone(lead.timezone) ? lead.timezone : fallbackTz;
+      const tz = leadTimezone(lead);
       const status = getFollowUpStatus(lead.Conversation.map(m => ({ role: m.role, createdAt: m.createdAt.toISOString() })), tz);
       return { lead, status };
     })
@@ -61,7 +65,7 @@ export async function runAutoDraftFollowUps({ limit = DEFAULT_LIMIT, dryRun = fa
               orderBy: { createdAt: 'desc' },
               select: { role: true, createdAt: true },
             });
-            const tz = isValidTimezone(lead.timezone) ? lead.timezone : fallbackTz;
+            const tz = leadTimezone(lead);
             const next = getFollowUpStatus(fresh.map(m => ({ role: m.role, createdAt: m.createdAt.toISOString() })), tz);
             if (!next || next.dueAt > Date.now()) continue; // no longer due
             status = next;
