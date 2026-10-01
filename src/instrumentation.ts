@@ -5,14 +5,14 @@ export async function register() {
   if (process.env.ENABLE_FOLLOWUP_CRON !== 'true') return;
 
   const { runAutoDraftFollowUps } = await import('./lib/auto-draft');
-  const { nextFlagTime, isValidTimezone, defaultFollowUpTimezone } = await import('./lib/followup');
+  const { nextSendTime, isValidTimezone, defaultFollowUpTimezone } = await import('./lib/followup');
   const { prisma } = await import('./lib/prisma');
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let running = false;
 
-  // Leads only become "needs follow-up" at 1pm or 7pm in their own timezone, so instead of polling
-  // we sleep until the next 1pm/7pm in any timezone that a lead uses (plus the default one).
+  // Follow-ups only go out at 2pm or 8pm in the lead's own timezone, so instead of polling
+  // we sleep until the next 2pm/8pm in any timezone that a lead uses (plus the default one).
   const planNext = async () => {
     try {
       const rows = await prisma.lead.findMany({
@@ -31,11 +31,11 @@ export async function register() {
 
       const now = Date.now();
       let next = Infinity;
-      for (const tz of zones) next = Math.min(next, nextFlagTime(tz, now));
+      for (const tz of zones) next = Math.min(next, nextSendTime(tz, now));
 
       clearTimeout(timer);
-      timer = setTimeout(tick, Math.max(next + 60_000 - now, 1_000)); // 1 minute after the flag time
-      console.log(`[followup-cron] next check ${new Date(next + 60_000).toISOString()} (${zones.size} timezone(s))`);
+      timer = setTimeout(tick, Math.max(next + 5_000 - now, 1_000)); // just after the send time
+      console.log(`[followup-cron] next check ${new Date(next + 5_000).toISOString()} (${zones.size} timezone(s))`);
     } catch (err) {
       console.error('[followup-cron] planning failed, retrying in 15 min', err);
       clearTimeout(timer);

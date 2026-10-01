@@ -162,9 +162,10 @@ function TimelineEditor({ leadId, leadName, clientName, onChanged, stageLabel, s
   );
 
   const insertButton = (afterMsgId: string | null) => (
-    <div className="flex justify-center py-1 opacity-0 hover:opacity-100 transition-opacity z-10 relative">
-      <Button size="sm" variant="outline" className="h-6 rounded-full text-xs bg-background border-border shadow-sm" onClick={() => setInsertAfter(afterMsgId)}>
+    <div className="flex justify-center py-1 opacity-60 hover:opacity-100 transition-opacity z-10 relative">
+      <Button size="sm" variant="outline" className="h-6 rounded-full text-xs bg-background border-border shadow-sm gap-1 px-2.5" onClick={() => setInsertAfter(afterMsgId)} title="Insert a message, agent note or stage marker here">
         <span className="material-symbols-sharp text-[1rem]">add</span>
+        <span>Insert</span>
       </Button>
     </div>
   );
@@ -212,6 +213,11 @@ function TimelineEditor({ leadId, leadName, clientName, onChanged, stageLabel, s
                 )}
 
                 <div className="flex flex-col items-start gap-1.5 p-3 rounded-md border shadow-sm group transition-colors bg-card border-border hover:border-primary/20 hover:bg-card/80">
+                  {msg.isNote ? (
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0 mt-0.5 tracking-wider bg-sky-500/15 text-sky-600" title="Private guidance for the AI. Never sent to the lead.">
+                      Agent note
+                    </span>
+                  ) : (
                   <DropdownMenu>
                     <DropdownMenuTrigger className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0 mt-0.5 tracking-wider cursor-pointer hover:opacity-80 transition-opacity outline-none ${msg.role === 'user' ? 'bg-primary/20 text-primary' : 'bg-muted text-muted-foreground'}`} title="Change role">
                       {msg.role === 'user' ? leadName : clientName}
@@ -225,6 +231,7 @@ function TimelineEditor({ leadId, leadName, clientName, onChanged, stageLabel, s
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
+                  )}
 
                   <DateTimePicker
                     value={draft.at ?? toLocalDateTimeValue(msg.createdAt)}
@@ -285,7 +292,7 @@ function InsertForm({ confirm, leadId, afterMsgId, messages, stageLabel, stageOp
   onCancel: () => void;
   onDone: () => Promise<void>;
 }) {
-  const [kind, setKind] = useState<'user' | 'assistant' | 'stage'>('user');
+  const [kind, setKind] = useState<'user' | 'assistant' | 'note' | 'stage'>('user');
   const [content, setContent] = useState('');
   const [markerStage, setMarkerStage] = useState(2);
   const [msgStage, setMsgStage] = useState<number | 'auto'>('auto');
@@ -313,12 +320,14 @@ function InsertForm({ confirm, leadId, afterMsgId, messages, stageLabel, stageOp
       if (!(await confirm({
         title: 'Insert Message',
         icon: 'add_comment',
-        message: `Insert this ${kind === 'assistant' ? 'AI' : 'lead'} message into the conversation?`,
-        detail: 'It is placed at this point in the timeline.',
-        confirmLabel: 'Insert',
+        message: kind === 'note' ? 'Add this note for the AI at this point in the conversation?' : `Insert this ${kind === 'assistant' ? 'AI' : 'lead'} message into the conversation?`,
+        detail: kind === 'note'
+          ? 'The AI follows it from its next reply on. It is never sent to the lead and does not affect follow-up timing.'
+          : 'It is placed at this point in the timeline.',
+        confirmLabel: kind === 'note' ? 'Add note' : 'Insert',
       }))) return;
       await insertConversationMessage(leadId, kind === 'stage' ? 'user' : kind, content, afterMsgId, msgStage === 'auto' ? undefined : msgStage);
-      toast.success('Message inserted');
+      toast.success(kind === 'note' ? 'Note added' : 'Message inserted');
     }
     await onDone();
   };
@@ -328,6 +337,7 @@ function InsertForm({ confirm, leadId, afterMsgId, messages, stageLabel, stageOp
       <div className="flex gap-2">
         <Button variant={kind === 'user' ? 'default' : 'outline'} size="sm" onClick={() => setKind('user')} className="h-7 text-xs">Lead</Button>
         <Button variant={kind === 'assistant' ? 'default' : 'outline'} size="sm" onClick={() => setKind('assistant')} className="h-7 text-xs">AI Draft</Button>
+        <Button variant={kind === 'note' ? 'default' : 'outline'} size="sm" onClick={() => setKind('note')} className="h-7 text-xs" title="Private guidance for the AI. Never sent to the lead.">Agent Note</Button>
         {canMark && (
           <Button variant={kind === 'stage' ? 'default' : 'outline'} size="sm" onClick={() => setKind('stage')} className="h-7 text-xs">Stage Marker</Button>
         )}
@@ -347,7 +357,12 @@ function InsertForm({ confirm, leadId, afterMsgId, messages, stageLabel, stageOp
         </div>
       ) : (
         <>
-          <Textarea value={content} onChange={e => setContent(e.target.value)} placeholder="Type new message..." className="text-sm min-h-[60px]" />
+          <Textarea
+            value={content}
+            onChange={e => setContent(e.target.value)}
+            placeholder={kind === 'note' ? "Tell the AI what to do, e.g. Don't mention the price yet, ask about their schedule first." : 'Type new message...'}
+            className="text-sm min-h-[60px]"
+          />
           <select
             value={msgStage}
             onChange={e => setMsgStage(e.target.value === 'auto' ? 'auto' : parseInt(e.target.value, 10))}

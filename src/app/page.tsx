@@ -117,10 +117,12 @@ export default function DMApp() {
       setLeadDetails(details);
       // Keep the sidebar's follow-up state in sync when messages/timezone change
       if (details?.Conversation) {
-        const messages = details.Conversation
+        // Agent notes aren't messages: they don't count for follow-ups or the list preview
+        const real = details.Conversation.filter((m: any) => !m.isNote);
+        const messages = real
           .map((m: any) => ({ role: m.role, createdAt: m.createdAt, autoDraft: m.autoDraft }))
           .reverse();
-        const last = details.Conversation[details.Conversation.length - 1];
+        const last = real[real.length - 1];
         const lastMessage = last
           ? { role: last.role, content: String(last.content).replace(/\s+/g, ' ').trim().slice(0, 140), createdAt: last.createdAt }
           : null;
@@ -390,8 +392,8 @@ export default function DMApp() {
 
   const handleNoResponseFollowUp = async () => {
     if (!leadDetails || !leadDetails.Conversation?.length) return;
-    const lastMsg = leadDetails.Conversation[leadDetails.Conversation.length - 1];
-    if (lastMsg.role !== 'assistant') {
+    const lastMsg = leadDetails.Conversation.filter((m: any) => !m.isNote).pop();
+    if (lastMsg?.role !== 'assistant') {
       toast.error("The last message must be from the AI to simulate a non-response follow-up.");
       return;
     }
@@ -411,8 +413,14 @@ export default function DMApp() {
   const handleSaveEdit = async (msg: any) => {
     if (!editingMessageId) return;
     // The lesson checkbox is only offered on AI messages
-    const learnLesson = msg.role === 'assistant' && extractGlobalLesson && msg.content !== editingContent;
-    const ok = await confirm(msg.role === 'user' ? {
+    const learnLesson = msg.role === 'assistant' && !msg.isNote && extractGlobalLesson && msg.content !== editingContent;
+    const ok = await confirm(msg.isNote ? {
+      title: 'Save Agent Note',
+      icon: 'edit_note',
+      message: 'Save your changes to this note?',
+      detail: 'The AI follows it from its next reply on. It is never sent to the lead.',
+      confirmLabel: 'Save',
+    } : msg.role === 'user' ? {
       title: 'Save Edited Message',
       icon: 'edit',
       message: <>Save your changes to <strong>{leadDetails?.name}</strong>&apos;s message?</>,
@@ -446,8 +454,8 @@ export default function DMApp() {
       
       // Remove the last AI draft if it exists so we can generate a fresh one
       if (leadDetails?.Conversation?.length) {
-         const lastMsg = leadDetails.Conversation[leadDetails.Conversation.length - 1];
-         if (lastMsg.role === 'assistant') {
+         const lastMsg = leadDetails.Conversation.filter((m: any) => !m.isNote).pop();
+         if (lastMsg?.role === 'assistant') {
             await deleteMessage(lastMsg.id);
          }
       }
@@ -1092,7 +1100,7 @@ export default function DMApp() {
                     {/* Header */}
                     <div className={`flex items-center gap-3 mb-1.5 px-2 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-                         {msg.role === 'user' ? (leadDetails?.name || 'Lead') : (leadDetails?.Client?.name || 'AI Draft')}
+                         {msg.isNote ? 'Agent note' : msg.role === 'user' ? (leadDetails?.name || 'Lead') : (leadDetails?.Client?.name || 'AI Draft')}
                        </span>
                        <div className="relative group flex items-center">
                          <span 
@@ -1105,11 +1113,21 @@ export default function DMApp() {
                            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-zinc-800"></div>
                          </div>
                        </div>
+                       {msg.isNote && (
+                         <span className="text-[10px] font-semibold uppercase tracking-wider text-sky-600 border border-sky-500/40 rounded px-1.5 py-0.5" title="Private guidance for the AI. Never sent to the lead and doesn't count for follow-ups.">
+                           Only the AI sees this
+                         </span>
+                       )}
+                       {msg.role === 'assistant' && msg.autoDraft && (
+                         <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-600 border border-amber-500/40 rounded px-1.5 py-0.5" title="Saved in the app only. It has not been sent to the lead.">
+                           Draft · not sent
+                         </span>
+                       )}
                        <div className={`flex gap-2 items-center ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
                           <button onClick={() => { navigator.clipboard.writeText(msg.content); toast.success('Copied!'); }} className="text-muted-foreground hover:text-foreground transition-colors" title="Copy">
                             <span className="material-symbols-sharp" style={{fontSize: '1rem'}}>content_copy</span>
                           </button>
-                          {msg.role === 'assistant' && (
+                          {msg.role === 'assistant' && !msg.isNote && (
                             <button onClick={() => handleRegenerateDraft(msg.id.toString())} className="text-muted-foreground hover:text-foreground transition-colors" title="Regenerate" disabled={isLoading}>
                               <span className="material-symbols-sharp" style={{fontSize: '1rem'}}>autorenew</span>
                             </button>
@@ -1126,7 +1144,7 @@ export default function DMApp() {
                     </div>
                     
                     {/* Bubble */}
-                    <div className={`p-4 rounded-2xl shadow-sm min-w-[60px] ${msg.role === 'user' ? 'bg-primary/20 text-foreground border border-primary/30 rounded-tr-[4px]' : 'bg-card text-card-foreground border border-border rounded-tl-[4px]'}`}>
+                    <div className={`p-4 rounded-2xl shadow-sm min-w-[60px] ${msg.isNote ? 'bg-sky-500/10 text-foreground border border-dashed border-sky-500/50 rounded-tl-[4px] italic' : msg.role === 'user' ? 'bg-primary/20 text-foreground border border-primary/30 rounded-tr-[4px]' : 'bg-card text-card-foreground border border-border rounded-tl-[4px]'}`}>
                       {editingMessageId === msg.id.toString() ? (
                         <div className="mt-2 min-w-[300px] md:min-w-[400px]">
                           <textarea 
@@ -1135,7 +1153,7 @@ export default function DMApp() {
                             className="w-full min-h-[120px] p-3 rounded-md border border-border bg-background text-foreground text-sm font-sans resize-y focus:outline-none focus:ring-1 focus:ring-primary"
                           />
                           <div className="flex items-center justify-between mt-3">
-                            {msg.role === 'assistant' ? (
+                            {msg.role === 'assistant' && !msg.isNote ? (
                               <label className="text-xs flex items-center gap-2 text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
                                 <input type="checkbox" checked={extractGlobalLesson} onChange={e => setExtractGlobalLesson(e.target.checked)} className="rounded border-border bg-background" />
                                 Extract Global Lesson

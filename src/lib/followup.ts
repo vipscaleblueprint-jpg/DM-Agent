@@ -104,18 +104,31 @@ function laterFollowUpSendTime(sentAt: number, step: Step, tz: string) {
   return zonedTimeToMs(d.year, d.month, d.day, step.hour, tz);
 }
 
-// Every "needs follow-up" flag lands at 1pm or 7pm local time (1h before the 2pm / 8pm send),
-// so the next moment anything can become due in a timezone is the next 1pm or 7pm there.
-export function nextFlagTime(tz: string, afterMs: number) {
+// Follow-ups are sent at 2pm or 8pm local time, so the next moment one can become due to send
+// in a timezone is the next 2pm or 8pm there.
+export function nextSendTime(tz: string, afterMs: number) {
   const p = zonedParts(afterMs, tz);
   let best = Infinity;
   for (let d = 0; d <= 1; d++) {
-    for (const hour of [14, 20].map(h => h - FLAG_LEAD_MS / 3_600_000)) {
+    for (const hour of [14, 20]) {
       const ms = zonedTimeToMs(p.year, p.month, p.day + d, hour, tz);
       if (ms > afterMs && ms < best) best = ms;
     }
   }
   return best;
+}
+
+// How long after 2pm / 8pm a due follow-up may still go out. Outside this window an overdue follow-up
+// (e.g. found after a restart, or by an external trigger like n8n polling every 15 minutes) waits
+// for the next 2pm / 8pm instead of going out at an odd hour.
+export const SEND_SLOT_GRACE_MS = 20 * 60 * 1000;
+
+export function isInSendSlot(tz: string, nowMs: number) {
+  const p = zonedParts(nowMs, tz);
+  return [14, 20].some(hour => {
+    const slot = zonedTimeToMs(p.year, p.month, p.day, hour, tz);
+    return nowMs >= slot && nowMs < slot + SEND_SLOT_GRACE_MS;
+  });
 }
 
 // `messages` may be in any order. Returns null when no follow-up is pending

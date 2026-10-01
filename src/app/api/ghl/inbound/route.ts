@@ -1,7 +1,9 @@
 import { NextResponse, after } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { generateDraftResponse } from '@/app/actions';
-import { toMetaChannel, lookupContactChannel, sendGhlMessage } from '@/lib/ghl';
+import { toMetaChannel } from '@/lib/ghl';
+import { deliverDraft } from '@/lib/ghl-deliver';
+import { realMessagesOnly } from '@/lib/agent-note';
 import { syncGhlConversation } from '@/lib/ghl-sync';
 import { releaseDoneLock } from '@/lib/lead-status';
 
@@ -76,7 +78,7 @@ export async function POST(request: Request) {
   }
 
   const content = messageText.trim() || '[Sent an attachment]';
-  const last = await prisma.conversation.findFirst({ where: { lead_id: lead.id }, orderBy: { createdAt: 'desc' } });
+  const last = await prisma.conversation.findFirst({ where: { lead_id: lead.id, ...realMessagesOnly }, orderBy: { createdAt: 'desc' } });
   if (last?.role === 'user' && last.content === content && Date.now() - last.createdAt.getTime() < DUPLICATE_WINDOW_MS) {
     return NextResponse.json({ ok: true, duplicate: true });
   }
@@ -93,7 +95,7 @@ export async function POST(request: Request) {
   const leadId = lead.id;
   after(async () => {
     try {
-      await replyToLead({ leadId, inboundId: inbound.id, contactId, locationId, channelHint });
+      await replyToLead({ leadId, inboundId: inbound.id, channelHint });
     } catch (err) {
       console.error('[ghl-inbound] reply failed', leadId, err);
     }
@@ -102,8 +104,8 @@ export async function POST(request: Request) {
   return NextResponse.json({ ok: true, leadId });
 }
 
-async function replyToLead({ leadId, inboundId, contactId, locationId, channelHint }: {
-  leadId: string; inboundId: bigint; contactId: string; locationId: string; channelHint: 'IG' | 'FB' | null;
+async function replyToLead({ leadId, inboundId, channelHint }: {
+  leadId: string; inboundId: bigint; channelHint: 'IG' | 'FB' | null;
 }) {
   await new Promise(r => setTimeout(r, REPLY_DELAY_MS));
 
@@ -115,49 +117,15 @@ async function replyToLead({ leadId, inboundId, contactId, locationId, channelHi
   }
 
   // A newer message came in (its own webhook will reply), or someone already answered (in GHL or the app)
-  const latest = await prisma.conversation.findFirst({ where: { lead_id: leadId }, orderBy: { createdAt: 'desc' } });
+  const latest = await prisma.conversation.findFirst({ where: { lead_id: leadId, ...realMessagesOnly }, orderBy: { createdAt: 'desc' } });
   if (latest?.id !== inboundId) return;
 
-  const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId }, include: { Client: true } });
+  const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
   const draft = await generateDraftResponse(leadId, lead.client_id);
   if (!draft.success || !draft.messageId) {
     console.error('[ghl-inbound] draft failed', leadId, draft.error);
     return;
   }
 
-  const markAsDraft = () => prisma.conversation.update({ where: { id: draft.messageId }, data: { autoDraft: true } });
-
-  const { ghlToken, ghlAutoReply } = lead.Client;
-  if (!ghlAutoReply || !ghlToken) {
-    await markAsDraft();
-    return;
-  }
-
-  // Anything that looks like the lead steered the AI waits for a human (see src/lib/reply-guard.ts)
-  if (draft.holdReason) {
-    console.warn(`[ghl-inbound] reply held as a draft for ${leadId}: ${draft.holdReason}`);
-    await markAsDraft();
-    return;
-  }
-
-  try {
-    let channel = channelHint || toMetaChannel(lead.ghlChannel);
-    if (!channel) {
-      channel = await lookupContactChannel(ghlToken, locationId, contactId);
-      if (channel) await prisma.lead.update({ where: { id: leadId }, data: { ghlChannel: channel, updatedAt: new Date() } });
-    }
-    if (!channel) {
-      console.error('[ghl-inbound] could not tell if contact is on Instagram or Facebook', leadId);
-      await markAsDraft();
-      return;
-    }
-    const sent = await sendGhlMessage(ghlToken, contactId, channel, draft.response!);
-    if (sent.messageId) {
-      await prisma.conversation.update({ where: { id: draft.messageId }, data: { ghlMessageId: sent.messageId } });
-    }
-  } catch (err) {
-    // Keep it visible in the app as a draft so someone can send it by hand
-    console.error('[ghl-inbound] send failed', leadId, err);
-    await markAsDraft();
-  }
+  await deliverDraft({ leadId, messageId: draft.messageId, text: draft.response!, holdReason: draft.holdReason, channelHint });
 }

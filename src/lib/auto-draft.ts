@@ -1,15 +1,18 @@
 import { prisma } from '@/lib/prisma';
 import { generateDraftResponse } from '@/app/actions';
-import { getFollowUpStatus, isValidTimezone, defaultFollowUpTimezone } from '@/lib/followup';
+import { getFollowUpStatus, isValidTimezone, defaultFollowUpTimezone, isInSendSlot } from '@/lib/followup';
 import { syncGhlConversation } from '@/lib/ghl-sync';
+import { deliverDraft } from '@/lib/ghl-deliver';
+import { realMessagesOnly } from '@/lib/agent-note';
 
 // Drafting calls the LLM once per lead, so a single run is capped. Leads left over are picked up on the next run.
 export const DEFAULT_LIMIT = 10;
 export const MAX_LIMIT = 50;
 
-// Drafts the next follow-up for every lead that is currently flagged as "needs follow-up"
-// (see src/lib/followup.ts). Each draft is saved as an assistant message, which moves the lead on
-// to its next follow-up step, so re-running never drafts the same one twice.
+// Drafts (and, for GHL leads with auto-reply on, sends) the next follow-up for every lead whose
+// follow-up send time (2pm / 8pm in the lead's timezone, see src/lib/followup.ts) has passed.
+// Each draft is saved as an assistant message, which moves the lead on to its next follow-up step,
+// so re-running never drafts the same one twice.
 export async function runAutoDraftFollowUps({ limit = DEFAULT_LIMIT, dryRun = false }: { limit?: number; dryRun?: boolean } = {}) {
   const cap = Math.min(Math.max(1, limit), MAX_LIMIT);
 
@@ -30,7 +33,7 @@ export async function runAutoDraftFollowUps({ limit = DEFAULT_LIMIT, dryRun = fa
       Client: { select: { timezone: true } },
       ghlContactId: true,
       Conversation: {
-        where: { NOT: { content: { startsWith: '[[STAGE_MARKER:' } } },
+        where: realMessagesOnly,
         orderBy: { createdAt: 'desc' },
         select: { role: true, createdAt: true },
       },
@@ -42,13 +45,15 @@ export async function runAutoDraftFollowUps({ limit = DEFAULT_LIMIT, dryRun = fa
     .map(lead => {
       const tz = leadTimezone(lead);
       const status = getFollowUpStatus(lead.Conversation.map(m => ({ role: m.role, createdAt: m.createdAt.toISOString() })), tz);
-      return { lead, status };
+      return { lead, status, tz };
     })
-    .filter((x): x is { lead: typeof x.lead; status: NonNullable<typeof x.status> } => !!x.status && x.status.dueAt <= now)
-    .sort((a, b) => a.status.dueAt - b.status.dueAt);
+    // Due, and it's 2pm / 8pm in the lead's timezone right now (overdue ones wait for the next slot)
+    .filter((x): x is { lead: typeof x.lead; status: NonNullable<typeof x.status>; tz: string } =>
+      !!x.status && x.status.sendAt <= now && isInSendSlot(x.tz, now))
+    .sort((a, b) => a.status.sendAt - b.status.sendAt);
 
   const batch = due.slice(0, cap);
-  const drafted: { leadId: string; name: string; followUpNumber: number }[] = [];
+  const drafted: { leadId: string; name: string; followUpNumber: number; sent?: boolean }[] = [];
   const failed: { leadId: string; name: string; error: string }[] = [];
 
   if (!dryRun) {
@@ -61,13 +66,13 @@ export async function runAutoDraftFollowUps({ limit = DEFAULT_LIMIT, dryRun = fa
           const { added } = await syncGhlConversation(lead.id);
           if (added > 0) {
             const fresh = await prisma.conversation.findMany({
-              where: { lead_id: lead.id, NOT: { content: { startsWith: '[[STAGE_MARKER:' } } },
+              where: { lead_id: lead.id, ...realMessagesOnly },
               orderBy: { createdAt: 'desc' },
               select: { role: true, createdAt: true },
             });
             const tz = leadTimezone(lead);
             const next = getFollowUpStatus(fresh.map(m => ({ role: m.role, createdAt: m.createdAt.toISOString() })), tz);
-            if (!next || next.dueAt > Date.now()) continue; // no longer due
+            if (!next || next.sendAt > Date.now() || !isInSendSlot(tz, Date.now())) continue; // no longer due
             status = next;
           }
         } catch (err) {
@@ -75,7 +80,18 @@ export async function runAutoDraftFollowUps({ limit = DEFAULT_LIMIT, dryRun = fa
         }
       }
       const res = await generateDraftResponse(lead.id, lead.client_id, undefined, { followUpNumber: status.followUpNumber });
-      if (res.success) drafted.push({ leadId: lead.id, name: lead.name, followUpNumber: status.followUpNumber });
+      if (res.success && res.messageId) {
+        let sent = false;
+        if (lead.ghlContactId) {
+          const delivery = await deliverDraft({ leadId: lead.id, messageId: res.messageId, text: res.response!, holdReason: res.holdReason });
+          sent = delivery.sent;
+          if (!sent) console.log(`[auto-draft] follow-up for ${lead.id} kept as a draft: ${delivery.reason}`);
+        } else {
+          // Not connected to GHL, so it can only be sent by hand
+          await prisma.conversation.update({ where: { id: res.messageId }, data: { autoDraft: true } });
+        }
+        drafted.push({ leadId: lead.id, name: lead.name, followUpNumber: status.followUpNumber, sent });
+      }
       else failed.push({ leadId: lead.id, name: lead.name, error: res.error || 'Unknown error' });
     }
   }

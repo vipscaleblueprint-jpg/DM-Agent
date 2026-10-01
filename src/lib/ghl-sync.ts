@@ -59,19 +59,24 @@ export async function syncGhlConversation(leadId: string) {
     const role = m.direction === 'inbound' ? 'user' : 'assistant';
     const sentAt = new Date(m.dateAdded);
 
-    // Already saved by us without the GHL id: link it (and use GHL's time so ordering is exact)
+    // Already saved by us without the GHL id: link it (and use GHL's time so ordering is exact).
+    // If it was a draft, it has now actually been sent.
     const mine = await prisma.conversation.findFirst({
       where: {
         lead_id: leadId,
         role,
         content,
         ghlMessageId: null,
-        createdAt: { gte: new Date(sentAt.getTime() - MATCH_WINDOW_MS), lte: new Date(sentAt.getTime() + MATCH_WINDOW_MS) },
+        OR: [
+          { createdAt: { gte: new Date(sentAt.getTime() - MATCH_WINDOW_MS), lte: new Date(sentAt.getTime() + MATCH_WINDOW_MS) } },
+          // A draft can be sent by hand any time after it was written
+          { autoDraft: true, createdAt: { lte: new Date(sentAt.getTime() + MATCH_WINDOW_MS) } },
+        ],
       },
       orderBy: { createdAt: 'asc' },
     });
     if (mine) {
-      await prisma.conversation.update({ where: { id: mine.id }, data: { ghlMessageId: m.id, createdAt: sentAt } });
+      await prisma.conversation.update({ where: { id: mine.id }, data: { ghlMessageId: m.id, createdAt: sentAt, autoDraft: false } });
       continue;
     }
 
