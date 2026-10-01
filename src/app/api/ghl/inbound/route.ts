@@ -14,8 +14,18 @@ export const maxDuration = 60;
 // only the webhook for the latest message replies.
 const REPLY_DELAY_MS = (Number(process.env.GHL_REPLY_DELAY_SECONDS) || 15) * 1000;
 
-// Same text from the same lead within this window is treated as a GHL retry
-const DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
+// The same text from the same lead within this window is the same message: either GHL retrying the
+// webhook, or the message was already pulled in by a GHL sync (e.g. someone opened the lead) before
+// the webhook arrived
+const DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
+
+// Inbound messages (by id) that already have a reply scheduled, so a GHL retry doesn't reply twice.
+// Kept for longer than the duplicate window.
+const replyScheduled = new Set<string>();
+function markReplyScheduled(id: bigint) {
+  replyScheduled.add(id.toString());
+  setTimeout(() => replyScheduled.delete(id.toString()), DUPLICATE_WINDOW_MS + 60_000);
+}
 
 // Called by a GHL workflow ("Customer Replied" trigger -> Webhook action) for each inbound FB/IG DM.
 // The secret can be sent as a header or, since some GHL webhook actions can't set headers, as ?secret=.
@@ -79,13 +89,17 @@ export async function POST(request: Request) {
 
   const content = messageText.trim() || '[Sent an attachment]';
   const last = await prisma.conversation.findFirst({ where: { lead_id: lead.id, ...realMessagesOnly }, orderBy: { createdAt: 'desc' } });
-  if (last?.role === 'user' && last.content === content && Date.now() - last.createdAt.getTime() < DUPLICATE_WINDOW_MS) {
+  const alreadySaved = last?.role === 'user' && last.content === content && Date.now() - last.createdAt.getTime() < DUPLICATE_WINDOW_MS;
+  if (alreadySaved && replyScheduled.has(last.id.toString())) {
     return NextResponse.json({ ok: true, duplicate: true });
   }
 
-  const inbound = await prisma.conversation.create({
-    data: { lead_id: lead.id, role: 'user', content, stage: lead.LeadState?.stage || 1 },
-  });
+  // Saved by a sync but not replied to yet: reply to that copy instead of saving a second one
+  const inbound = alreadySaved
+    ? last
+    : await prisma.conversation.create({
+        data: { lead_id: lead.id, role: 'user', content, stage: lead.LeadState?.stage || 1 },
+      });
   await releaseDoneLock(lead.id);
 
   if (lead.LeadState?.leadStatus === 'NOT_QUALIFIED') {
@@ -93,6 +107,7 @@ export async function POST(request: Request) {
   }
 
   const leadId = lead.id;
+  markReplyScheduled(inbound.id);
   after(async () => {
     try {
       await replyToLead({ leadId, inboundId: inbound.id, channelHint });

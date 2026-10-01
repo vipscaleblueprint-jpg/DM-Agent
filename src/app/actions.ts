@@ -346,6 +346,9 @@ export async function getFullSystemPrompt(leadId: string, clientId: string) {
   };
 }
 
+// A normal draft (thinking included) is well under 2k tokens
+const DRAFT_MAX_OUTPUT_TOKENS = 8000;
+
 export async function generateDraftResponse(leadId: string, clientId: string, simulatedTime?: string, options?: { followUpNumber?: number }) {
   if (!process.env.API_KEY) {
     return { success: false, error: 'API_KEY is not set in .env' };
@@ -360,10 +363,13 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
   promptParts.push(...(await loadContextAssets(client?.context)));
 
   try {
-    const { object } = await generateObject({
+    // The model occasionally gets stuck repeating itself inside a field until it runs out of tokens,
+    // which leaves unparseable JSON. Cap the output so that fails fast, and try once more.
+    const draft = () => generateObject({
       model: google('gemini-3.7-flash'),
       system: systemPrompt,
       messages: [{ role: 'user', content: promptParts }],
+      maxOutputTokens: DRAFT_MAX_OUTPUT_TOKENS,
       schema: z.object({
         drafted_response: z.string().describe('The natural DM response to send to the lead'),
         stage: z.number().describe('The current stage number'),
@@ -371,9 +377,9 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
         // primary_intent: z.enum(['wealth', 'time_freedom', 'additional_income', 'career_change', 'identity', 'ownership', 'fulfillment', 'clarity', 'legacy', 'other', 'unknown']).optional().describe('Primary intent of the lead'),
         // connection_level: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional().describe('Connection level built so far'),
         stage_ready_for_promotion: z.boolean().describe('Are they ready to advance to the next stage based on exit conditions?'),
-        reason: z.string().describe('Brief explanation for stage promotion decision'),
+        reason: z.string().describe('One or two sentences explaining the stage promotion decision'),
         next_stage: z.number().describe('The stage they should be in next'),
-        summary: z.string().optional().describe('Brief summary of what we know about the lead so far'),
+        summary: z.string().optional().describe('Facts we know about the lead so far, in at most 4 short sentences (under 80 words). No commentary about the output.'),
         assessment_updates: z.record(z.string(), z.any()).describe('A dictionary updating any dynamic checklist keys for this stage. Key is the checklist item ID, value is the updated value (e.g., boolean or string)'),
         latest_message_sender: z.enum(['ME', 'LEAD']).optional().describe('Who sent the latest message'),
         lead_status: z.enum(['HOT', 'NOT_HOT', 'NOT_QUALIFIED', 'DONE']).optional().describe('Lead status assessment based on instructions. DONE = already availed the offer and not asking about anything new'),
@@ -385,6 +391,13 @@ export async function generateDraftResponse(leadId: string, clientId: string, si
         prior_exploration_captured: z.boolean().optional().describe('Prior Exploration: Captured or Missing')
       }),
     });
+    let object;
+    try {
+      ({ object } = await draft());
+    } catch (err) {
+      console.warn('[draft] first attempt failed, retrying', leadId, (err as Error).message?.slice(0, 200));
+      ({ object } = await draft());
+    }
 
     const resolveStageName = async (num: number, currentName: string, clientId: string) => {
       const st = await prisma.clientStage.findFirst({ where: { client_id: clientId, stageOrder: num } });
